@@ -349,22 +349,17 @@ fn external_front_window() -> Option<linux::WindowInfo> {
 
 /// The frontmost app's pid, or the last external one while Scrawl itself is in front.
 pub fn frontmost_external_pid() -> Option<i32> {
-    if linux::wayland_session()
-        && !linux::hyprland::active()
-        && let Some(app) = linux::atspi::last_external_app()
-    {
+    if let Some(app) = linux::accessibility_front_app() {
         return app.pid.map(|pid| pid as i32);
     }
     external_front_window().map(|w| w.pid as i32)
 }
 
-/// The frontmost app (pid, name, identifier), or the last one before Scrawl. On Wayland the
-/// X server sees only X11 apps, so the accessibility bus is asked first (`linux::atspi`).
+/// The frontmost app (pid, name, identifier), or the last one before Scrawl. On a Wayland
+/// desktop other than Hyprland the X server sees only X11 apps, so the accessibility bus is asked
+/// first (`linux::accessibility_front_app`).
 pub fn frontmost_app_info() -> Option<(i32, String, Option<String>)> {
-    if linux::wayland_session()
-        && !linux::hyprland::active()
-        && let Some(app) = linux::atspi::last_external_app()
-    {
+    if let Some(app) = linux::accessibility_front_app() {
         return Some((app.pid.unwrap_or(0) as i32, app.name, Some(app.id)));
     }
     let front = external_front_window()?;
@@ -454,10 +449,9 @@ pub fn discover_target_at(window_query: Option<&str>, point: Option<[f64; 2]>) -
     let (rect, scale) = monitors
         .get(index)
         .map_or(([0.0, 0.0, 1920.0, 1080.0], 1.0), |m| (m.rect, m.scale));
-    let title = if linux::wayland_session() && !linux::hyprland::active() {
-        linux::atspi::last_external_app().and_then(|app| app.title)
-    } else {
-        front.map(|w| w.title)
+    let title = match linux::session() {
+        linux::Session::Wayland => linux::accessibility_front_app().and_then(|app| app.title),
+        linux::Session::X11 | linux::Session::Hyprland => front.map(|w| w.title),
     };
     TargetInfo {
         mode: CaptureMode::Display,
@@ -526,21 +520,13 @@ fn keycode(keysym: u32) -> Option<u8> {
 }
 
 /// Pastes into the app in front: Ctrl+V, or Ctrl+Shift+V in a terminal (Ctrl+V is a control
-/// character there). On Wayland through the RemoteDesktop portal, which asks once; on X11
-/// through XTEST. A Ctrl the user still holds is left alone.
+/// character there). On Wayland the compositor types it (`linux::send_paste`); on X11, XTEST.
+/// A Ctrl the user still holds is left alone.
 pub fn post_synthetic_cmd_v() {
     let shift = super::is_frontmost_terminal();
-    if linux::hyprland::active() {
-        if let Err(error) = linux::hyprland::send_paste(shift) {
-            scrawl_log(format!("paste: Hyprland refused: {error:#}"));
-        }
-        return;
-    }
-    if linux::wayland_session() {
-        if let Err(error) = linux::portal::send_paste(shift) {
-            scrawl_log(format!(
-                "paste: the RemoteDesktop portal refused: {error:#}"
-            ));
+    if linux::session() != linux::Session::X11 {
+        if let Err(error) = linux::send_paste(shift) {
+            scrawl_log(format!("paste: refused: {error:#}"));
         }
         return;
     }
@@ -848,7 +834,7 @@ pub fn install_global_hotkeys(telemetry: &Arc<SharedCaptureTelemetry>) {
             }
             // Hyprland's GlobalShortcuts portal registers a shortcut but leaves binding it to
             // the user's config, so Scrawl binds its keys itself over Hyprland's socket.
-            if linux::hyprland::active() {
+            if linux::session() == linux::Session::Hyprland {
                 match bind_hyprland(&record, &paste, false) {
                     Ok(()) => return set_backend(Backend::Hyprland),
                     Err(error) => scrawl_log(format!("Hyprland binds: {error:#}")),
@@ -929,7 +915,9 @@ pub fn set_shortcuts(
             Backend::Hyprland => {
                 if let Err(error) = bind_hyprland(&record, &paste, false) {
                     scrawl_log(format!("Hyprland binds: {error:#}"));
-                    let _ = bind_hyprland(&old_record, &old_paste, false);
+                    if let Err(error) = bind_hyprland(&old_record, &old_paste, false) {
+                        scrawl_log(format!("Hyprland binds: restoring the old ones: {error:#}"));
+                    }
                     return Err(ShortcutKind::Record);
                 }
             }
@@ -980,7 +968,9 @@ pub fn pause_shortcuts(telemetry: &SharedCaptureTelemetry, paused: bool) {
             let _ = linux::shortcuts::bind(&record, &paste, paused);
         }
         Backend::Hyprland => {
-            let _ = bind_hyprland(&record, &paste, paused);
+            if let Err(error) = bind_hyprland(&record, &paste, paused) {
+                scrawl_log(format!("Hyprland binds: {error:#}"));
+            }
         }
         Backend::Portal | Backend::Devices | Backend::None => {}
     }

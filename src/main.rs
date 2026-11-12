@@ -597,15 +597,13 @@ enum Command {
         /// URL scheme of the iOS app (for example `updown`).
         #[arg(long)]
         scheme: String,
-        /// Scrawl ingest base URL(s); defaults to this Mac's Tailscale and LAN IPs on `--port`.
-        #[arg(long = "url")]
+        /// Ingest base URL(s): a hosted HTTPS endpoint. Required: this build listens on
+        /// loopback only, so it never offers this computer's LAN or Tailscale addresses.
+        #[arg(long = "url", required = true)]
         urls: Vec<String>,
         /// Optional OpenCode session ID (`ses_...`) to route captures from this app to.
         #[arg(long)]
         session: Option<String>,
-        /// Ingest port used when discovering default Tailscale / LAN URLs.
-        #[arg(long, default_value_t = phone::DEFAULT_INGEST_PORT)]
-        port: u16,
     },
     /// Run the headless ScrawlKit ingest server (HTTP + optional USB watcher, no GUI or clipboard).
     Serve {
@@ -1628,9 +1626,7 @@ fn main() -> Result<()> {
         Command::Shortcut { which } => {
             if linux::ipc::send(&format!("shortcut {which}")).is_err() && which == "record" {
                 // Not running: start it, recording.
-                let exe = std::env::var_os("APPIMAGE")
-                    .map(PathBuf::from)
-                    .map_or_else(std::env::current_exe, Ok)?;
+                let exe = linux::app_executable()?;
                 std::process::Command::new(exe)
                     .args(["app", "--record"])
                     .stdin(std::process::Stdio::null())
@@ -2449,20 +2445,9 @@ fn main() -> Result<()> {
             scheme,
             urls,
             session,
-            port,
         } => {
             let token = handoff::ensure_ingest_token()?;
-            let resolved_urls = if urls.is_empty() {
-                phone::discover_default_ingest_urls(port)
-            } else {
-                urls
-            };
-            ensure!(
-                !resolved_urls.is_empty(),
-                "Could not discover a Tailscale or LAN IP; pass --url http://<host>:{port}"
-            );
-            let link =
-                phone::format_setup_link(&scheme, &resolved_urls, &token, session.as_deref())?;
+            let link = phone::format_setup_link(&scheme, &urls, &token, session.as_deref())?;
             println!("{link}");
             if let Ok(qr) = helper::qr(&link) {
                 eprintln!("\n{qr}");

@@ -15,9 +15,7 @@ fn entry() -> PathBuf {
 /// The command the desktop runs at login: this executable's tray app (the AppImage when Scrawl
 /// runs from one, which `$APPIMAGE` names).
 fn command() -> Result<String> {
-    let exe = std::env::var_os("APPIMAGE")
-        .map(PathBuf::from)
-        .map_or_else(std::env::current_exe, Ok)?;
+    let exe = super::app_executable()?;
     Ok(format!("\"{}\" app", exe.display()))
 }
 

@@ -30,13 +30,17 @@ Hyprland has no RemoteDesktop portal and its GlobalShortcuts portal leaves bindi
 the user's config, so the GNOME/KDE paths above don't fit. Instead `linux::hyprland` talks to
 Hyprland's socket (`$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket.sock`), which
 answers any client. Tested on Omarchy with Hyprland 0.56 (Lua config), two displays at scale 1.
+`linux::session()` settles once which of X11, Hyprland or another Wayland desktop answers, and
+the `linux` facade (`foreground_window`, `top_level_windows`, `cursor_position`, `send_paste`,
+`accessibility_front_app`) picks the source from it, so callers don't test the desktop themselves.
 
 | | Hyprland |
 |---|---|
 | Shortcuts | `hl.bind` through `hyprctl eval`, running `scrawl shortcut record\|paste` (`linux::ipc`). Binds made over the socket go when the config reloads, so the event socket (`.socket2.sock`) is watched and `configreloaded` binds them again. The combos Scrawl bound live in the Lua global `scrawl_binds`, so a rebind removes exactly those |
 | Recording | The ScreenCast portal, with a restore token per display (`screencast@x,y,wxh` in `portal.json`), because Hyprland's portal shares one display per session: the first recording on each display asks which to share. A window or area is that display cropped to its rect. Omarchy's picker hides the "remember" checkbox and uses `screencopy:allow_token_by_default` |
-| Pointer, app in front, window list | `cursorpos`, `activewindow`, `clients` (any app, native Wayland too). Window ids are `Client::id` (top bit set, never an X id), so `linux::window_info` and `linux::activate` route them back to Hyprland |
+| Pointer, app in front, window list | `cursorpos`, `activewindow`, `clients` (any app, native Wayland too). App names come from Hyprland's window class (an Omarchy web app keeps its own name, not Chromium's). Window ids are `WindowId::Hyprland` (bit 30 set; X ids fit in 29 bits), so `linux::window_info` and `linux::activate` route them back to Hyprland |
 | Work area | Each output's `reserved` space (Omarchy's bar), since XWayland has no `_NET_WORKAREA` |
+| Clipboard | `wl-copy`, set on the Wayland side, since most apps there are native |
 | Paste | Hyprland types it: `send_key_state` down then up, `CTRL SHIFT` for windows Omarchy tags `terminal`, as Omarchy's universal paste does |
 | Clicks, keys, ⇧ ink | The input devices, as on any Wayland session (`input` group) |
 
@@ -72,16 +76,13 @@ Neither X11 nor GNOME's or KDE's screencasts let an app leave its windows out, s
 - **Movies:** GStreamer (`linux::media`): the source above, `videorate` to 30 fps, the first encoder installed of `x264enc`, `openh264enc` and VA-API's, `mp4mux`. Candidate frames come off a `tee` through an `appsink`; it holds end-of-stream back until its last frame is taken, so `Recorder::finish` drains it. Compositors send frames only when the screen changes, so the last frame is reused until a new one comes. Without an encoder Scrawl records no movie and keeps sharper candidates instead.
 - **Transcription:** Parakeet through `transcribe.cpp` (`speech.rs`, shared with Windows). As on Windows, Scrawl downloads the model once at launch through `speech_model::ensure` (731 MB with `curl` or `wget`, pinned Hugging Face revision, checked against its SHA-256, into `~/.local/share/scrawl/models`) unless Hex already has one; Settings › Recording shows its progress. A capture made before it lands says so in `summary.md` and is marked `.transcript-pending`, and is transcribed again in place when the download finishes.
 - **Tray:** a StatusNotifierItem (`ksni`); left click starts a recording, the menu is the macOS menu bar menu. GNOME shows it with the AppIndicator extension (on by default on Ubuntu). Without a tray, Scrawl says so in a notification, and launching it again opens Settings (`linux::ipc`, a socket at `$XDG_RUNTIME_DIR/scrawl.sock`).
-- **Clipboard:** text and PNG through the X clipboard (`linux::clipboard`) on X11 and GNOME; KDE Wayland uses `wl-copy` (bundled in the AppImage) because KWin does not reliably bridge background XWayland selections to native apps.
+- **Clipboard:** text and PNG through the X clipboard (`linux::clipboard`) on X11 and GNOME; KDE Wayland and Hyprland use `wl-copy` (bundled in the AppImage) because KWin does not reliably bridge background XWayland selections to native apps.
 - **Launch at login:** `~/.config/autostart/scrawl.desktop`. **Trash:** the freedesktop trash. **Captures:** `~/.local/share/scrawl/captures`; **log:** `~/.local/share/scrawl/Logs/scrawl.log`.
 - **Command-line tool:** Settings › Agents links `~/.local/bin/scrawl` to the AppImage (`$APPIMAGE`).
 
 ## Off the network (this fork)
 
-The ingest server (`phone::serve_http`, port 47777) listens on `127.0.0.1` only, not every
-interface as upstream does. Local `/sdk.js` registrations and `scrawl serve` clients on the same
-machine still work; ScrawlKit uploads from a phone over Wi-Fi or Tailscale do not, and a
-`scrawl link` setup link that names a LAN or Tailscale address points at nothing.
+The ingest server listens on `127.0.0.1` only, on every OS; see `docs/iphone-and-routing.md`.
 
 ## Not on Linux
 

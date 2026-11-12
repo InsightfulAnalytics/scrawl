@@ -309,6 +309,12 @@ pub(super) fn hud_pill_origin(display: gpui::Bounds<Pixels>) -> Point<Pixels> {
     }
 }
 
+/// A desktop notification for a capture that failed: on Linux nothing else may be showing (the
+/// pill is gone, and a desktop without a tray shows no menu).
+pub(super) fn notify_capture_failed(error: &str) {
+    linux::shell::notify("Capture failed", error);
+}
+
 /// Moves the pill window to the monitor holding `point` (global pixels).
 pub(super) fn place_hud_pill(point: [f64; 2]) {
     let (Some(id), Some(rect)) = (own_window(&PILL_WINDOW), pill_rect_at(point)) else {

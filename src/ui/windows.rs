@@ -400,6 +400,9 @@ pub(super) fn hud_pill_origin(display: gpui::Bounds<Pixels>) -> Point<Pixels> {
     }
 }
 
+/// No notification for a failed capture on Windows: the pill closes and the log has the error.
+pub(super) fn notify_capture_failed(_error: &str) {}
+
 /// Moves the pill window to the display holding `point` (global pixels). Off the UI thread, as
 /// the ink overlay's `move_to` is: this runs inside an update, where GPUI's resize and DPI
 /// callbacks can't reach the app; the window's thread handles the move from its loop.

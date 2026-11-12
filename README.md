@@ -481,16 +481,19 @@ Touches aren't drawn on screen in either capture method. Each touch goes on the 
 phase, and the label of the element under it) and Scrawl on the Mac draws taps and swipes from it.
 
 ScrawlKit stays completely inert on devices that haven't been configured (no gesture recognizers,
-overlay window, network calls, files, or background `URLSession`). To pair your iPhone with this Mac, print a setup link (and
-terminal QR code) and open it on the phone:
+overlay window, network calls, files, or background `URLSession`).
+
+In this fork the ingest server listens on `127.0.0.1` only, so a phone can't upload to this
+computer over the network; it can use a cable (below) or a hosted HTTPS endpoint. To pair it with
+an endpoint, print a setup link (and terminal QR code) and open it on the phone:
 
 ```sh
-scrawl link --scheme updown [--session ses_…]
-# updown://scrawl?url=http%3A%2F%2F100.64.0.12%3A47777&url=http%3A%2F%2F192.168.1.20%3A47777&token=…
+scrawl link --scheme updown --url https://problems.example.com/api/scrawl/updown [--session ses_…]
 ```
 
 `scrawl link` reads (or generates with mode `0600`) `ingestToken` in
-`~/.config/scrawl/config.json` and defaults to this Mac's Tailscale and LAN IPs on port `47777`.
+`~/.config/scrawl/config.json`. `--url` is required: it never offers this computer's LAN or
+Tailscale addresses.
 Opening `<scheme>://scrawl?reset=1` on the phone clears its Keychain config (`dev.kitlangton.scrawl`).
 For cabled USB fallback via `devicectl` (`Documents/Scrawl`), list the app bundle IDs in
 `~/.config/scrawl/config.json` under `"usbApps": ["com.kitlangton.UpDown"]`.
@@ -534,8 +537,7 @@ ask before forwarding. Keep private-project endpoints and recipients unchanged.
 
 #### Sending to an HTTPS endpoint
 
-A setup link can point at a hosted endpoint instead of a Mac, for phones that aren't on your LAN or
-tailnet (for example `ledger://scrawl?url=https%3A%2F%2Fproblems.example.com%2Fapi%2Fscrawl%2Fledger&token=pbcap_…`).
+A setup link points at a hosted endpoint (for example `ledger://scrawl?url=https%3A%2F%2Fproblems.example.com%2Fapi%2Fscrawl%2Fledger&token=pbcap_…`).
 It speaks the same protocol as the Mac: `GET {url}/health` and `POST {url}/ingest` with a bearer
 token, where the body is a 4-byte big-endian timeline length, the timeline JSON, then the MP4. When
 any configured URL is `https`, recordings go through a durable outbox instead of the LAN path
@@ -626,9 +628,10 @@ Screen: Sessions · server: studio · session: ses_3f…
 
 ### Headless ingest server (`scrawl serve`)
 
-On an always-on Mac (such as a Mac Studio reachable over Tailscale), run `scrawl serve` to accept
-authenticated ScrawlKit uploads, build `.scrawl` bundles, and route them straight into local
-OpenCode sessions without running the GUI app:
+Run `scrawl serve` to accept authenticated ScrawlKit uploads, build `.scrawl` bundles, and route
+them straight into local OpenCode sessions without running the GUI app. In this fork it listens on
+`127.0.0.1` only, so it takes uploads from this machine (a local proxy or the USB watcher), never
+from the network:
 
 ```sh
 scrawl serve [--port 47777] [--usb]
