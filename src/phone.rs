@@ -1235,8 +1235,7 @@ pub fn format_setup_link(
 }
 
 /// Starts Scrawl's background ScrawlKit ingest inside the GUI app: an HTTP server on
-/// `0.0.0.0:47777` the phone uploads to, and a cabled-iPhone `devicectl` watcher for when the
-/// network can't reach the Mac. Each recording becomes a `.scrawl` bundle, lands on the clipboard
+/// `127.0.0.1:47777` (`serve_http`), and a cabled-iPhone `devicectl` watcher. Each recording becomes a `.scrawl` bundle, lands on the clipboard
 /// and is queued into the OpenCode session matching the app.
 pub fn start_ingest_server(ui_sender: flume::Sender<LiveOverlayEvent>) {
     if let Err(err) = crate::handoff::ensure_ingest_token() {
@@ -1283,8 +1282,11 @@ pub fn run_ingest_server(port: u16, usb: bool, no_opencode: bool) -> Result<()> 
     serve_http(port, config)
 }
 
+/// The ingest server listens on loopback only: this fork keeps Scrawl off the network, so a
+/// phone on Wi-Fi can't upload, but `/sdk.js` registrations from local dev pages and
+/// `scrawl serve` clients on this machine still reach it.
 fn serve_http(port: u16, config: IngestConfig) -> Result<()> {
-    let addr = format!("0.0.0.0:{port}");
+    let addr = format!("127.0.0.1:{port}");
     let listener = std::net::TcpListener::bind(&addr)
         .with_context(|| format!("port {port} already in use"))?;
     scrawl_log(format!("ingest server listening on {addr}"));
