@@ -1,0 +1,879 @@
+{
+  "groups": [
+    { "id": "start", "title": "Start a capture" },
+    { "id": "record", "title": "While recording" },
+    { "id": "finish", "title": "Finishing" },
+    { "id": "agent", "title": "What the agent gets" },
+    { "id": "delivery", "title": "Delivery and routing" },
+    { "id": "iphone", "title": "iPhone" },
+    { "id": "settings", "title": "Settings" },
+    { "id": "storage", "title": "Storage and retention" },
+    { "id": "cli", "title": "CLI and agent skill" },
+    { "id": "export", "title": "Export" },
+    { "id": "install", "title": "Install and updates" },
+    { "id": "platforms", "title": "Platforms" }
+  ],
+  "flow": [
+    { "title": "Capture", "detail": "⌥⇧S, the picker, a cabled iPhone or ScrawlKit", "group": "start" },
+    { "title": "Record", "detail": "Screen, voice, clicks and ⇧ ink on one clock", "group": "record" },
+    { "title": "Bundle", "detail": "Keyframes, contact sheet, summary.md, scrawl.json", "group": "agent" },
+    { "title": "Deliver", "detail": "Clipboard and ⌥⇧V, or straight to a session", "group": "delivery" },
+    { "title": "Agent", "detail": "The skill, then scrawl zoom for a closer look", "group": "cli" }
+  ],
+  "features": [
+    {
+      "id": "record-screen",
+      "group": "start",
+      "name": "Record the screen",
+      "says": "Press the shortcut and Scrawl records the display under the pointer once the keys come up, with a red edge glow as the cue.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "shortcuts": [{ "keys": "⌥⇧S", "does": "Start or finish a capture (Alt+Shift+S on Windows and Linux)" }],
+      "docs": ["README.md#capture-controls", "docs/capture.md"]
+    },
+    {
+      "id": "switch-chips",
+      "group": "start",
+      "name": "Switch target as it starts",
+      "says": "The capsule opens onto Area · Window · Screen · iPhone for 3.5 s; a chip restarts the capture on that target.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "note": "The iPhone chip is Mac only.",
+      "docs": ["docs/capture.md"]
+    },
+    {
+      "id": "picker",
+      "group": "start",
+      "name": "Choose What to Record…",
+      "says": "The menu's picker opens on the pointer's display: drag an area, click a window, or pick Screen or iPhone.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "note": "The Linux preview's Window mode lists X11 windows only.",
+      "shortcuts": [
+        { "keys": "1–4", "does": "Picker: jump to a mode" },
+        { "keys": "Tab / ⇧Tab", "does": "Picker: next or previous mode" },
+        { "keys": "Space", "does": "Picker: toggle Area and Window" },
+        { "keys": "⏎", "does": "Picker: record the selection" }
+      ],
+      "docs": ["README.md#capture-controls"]
+    },
+    {
+      "id": "autocrop",
+      "group": "start",
+      "name": "Auto-crop",
+      "says": "Screen captures crop each keyframe to the window or region you worked in; uncropped frames stay in frames-full/.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "config": [{ "key": "autocrop", "value": "false | {\"padding\": 24, …}", "does": "Turn auto-crop off or change its settings" }],
+      "docs": ["README.md#auto-crop-screen-captures"]
+    },
+    {
+      "id": "multi-display",
+      "group": "start",
+      "name": "More than one display",
+      "says": "The picker, overlay and capsule follow the pointer between displays; each capture belongs to one display.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows"],
+      "docs": ["docs/capture.md", "docs/windows.md"]
+    },
+    {
+      "id": "recent-area",
+      "group": "start",
+      "name": "What to record and Recent Area",
+      "says": "A Recording setting picks what the shortcut records, including the last area drawn, reused without another drag.",
+      "status": "review:#69",
+      "platforms": ["mac", "windows", "linux"],
+      "added": "2026-10-21",
+      "pr": 69,
+      "config": [
+        { "key": "whatToRecord", "value": "\"screen\" | \"window\" | \"area\" | \"recentArea\"", "does": "What the shortcut records" },
+        { "key": "recentArea", "value": "rect", "does": "The last area recorded" }
+      ]
+    },
+    {
+      "id": "screenshots",
+      "group": "start",
+      "name": "Screenshots",
+      "says": "⌥⇧4 takes a still of an area, window or screen into a one-frame bundle.",
+      "status": "branch:proto/screenshots",
+      "platforms": ["mac"],
+      "added": "2026-10-19",
+      "flag": "screenshots",
+      "shortcuts": [{ "keys": "⌥⇧4", "does": "Take a screenshot (with the screenshots flag)" }]
+    },
+
+    {
+      "id": "shift-ink",
+      "group": "record",
+      "name": "Draw with ⇧",
+      "says": "Hold ⇧ and move to draw red ink over any app; it fades after release and is redrawn on the keyframes.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "note": "On Wayland the Linux preview needs the input group for ink outside its own windows.",
+      "shortcuts": [{ "keys": "⇧ + move", "does": "Draw" }],
+      "docs": ["README.md#capture-controls"]
+    },
+    {
+      "id": "pins",
+      "group": "record",
+      "name": "Pins",
+      "says": "⇧-click drops a numbered pin: a brief pulse on screen, a mark on the keyframe.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "shortcuts": [{ "keys": "⇧ click", "does": "Drop a numbered pin" }],
+      "docs": ["README.md#capture-controls"]
+    },
+    {
+      "id": "undo-cancel",
+      "group": "record",
+      "name": "Undo and cancel",
+      "says": "Undo removes the last stroke; Esc cancels the selection or the capture.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "shortcuts": [
+        { "keys": "⌘Z", "does": "Undo the last stroke (Ctrl+Z on Windows)" },
+        { "keys": "Esc", "does": "Cancel the selection or capture" }
+      ],
+      "docs": ["README.md#capture-controls"]
+    },
+    {
+      "id": "clicks",
+      "group": "record",
+      "name": "Clicks pass through",
+      "says": "Clicks, drags and scrolls reach the app underneath and are recorded; keyframes show a ripple.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "note": "Over Wayland apps the Linux preview's click positions can be stale.",
+      "docs": ["README.md#capture-controls"]
+    },
+    {
+      "id": "capsule",
+      "group": "record",
+      "name": "Capsule",
+      "says": "The capsule shows the time with Finish and Cancel on the display in use; on a Mac it's a native Metal panel, black or glass.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "note": "Windows and Linux draw the GPUI capsule; glass needs macOS 26.",
+      "config": [
+        { "key": "nativePill", "value": "false", "does": "Draw the GPUI capsule instead of the Metal one (Mac)" },
+        { "key": "pillStyle", "value": "\"black\" | \"glass\"", "does": "The Metal capsule's look" }
+      ],
+      "docs": ["docs/motion.md"]
+    },
+    {
+      "id": "hidden-windows",
+      "group": "record",
+      "name": "Own windows left out",
+      "says": "Scrawl's capsule, picker and overlay, and macOS prompts over a Screen or Area capture, stay out of the recording.",
+      "status": "stable@0.3.6",
+      "platforms": ["mac", "windows"],
+      "note": "Prompts are a macOS case. The Linux preview records its own windows and masks the capsule from keyframe picking.",
+      "docs": ["docs/capture.md"]
+    },
+    {
+      "id": "lower-playback",
+      "group": "record",
+      "name": "Lower other audio",
+      "says": "Ramps the output volume down to a set level while recording and back when it ends.",
+      "status": "stable@0.3.13",
+      "platforms": ["mac"],
+      "note": "Uses CoreAudio through the helper.",
+      "config": [
+        { "key": "lowerPlayback", "value": "true", "does": "Lower other audio while recording" },
+        { "key": "playbackLevel", "value": "0–100 (20)", "does": "Percent of the volume to keep" }
+      ],
+      "docs": ["docs/onboarding-and-settings.md"]
+    },
+    {
+      "id": "live-transcribe",
+      "group": "record",
+      "name": "Transcribe while recording",
+      "says": "Streams the microphone to Apple Speech during the capture, so finishing waits only for the last words.",
+      "status": "experiment:liveTranscribe",
+      "platforms": ["mac"],
+      "added": "2026-10-19",
+      "docs": ["README.md#transcribing-while-recording-experiment", "docs/keyframes-and-text.md"]
+    },
+    {
+      "id": "straight-line",
+      "group": "record",
+      "name": "Straight lines",
+      "says": "Hold ⌥⇧ while drawing for a straight line from where the stroke began.",
+      "status": "review:#5",
+      "platforms": ["mac"],
+      "added": "2026-10-19",
+      "pr": 5,
+      "shortcuts": [{ "keys": "⌥⇧ + move", "does": "Draw a straight line (PR #5)" }]
+    },
+    {
+      "id": "swiftui-pill",
+      "group": "record",
+      "name": "SwiftUI capsule",
+      "says": "A SwiftUI capsule drawn by the helper in place of the Metal one, kept out of captures.",
+      "status": "branch:feat/swiftui-pill",
+      "platforms": ["mac"],
+      "added": "2026-10-19",
+      "config": [{ "key": "pillRenderer", "value": "\"swiftui\"", "does": "Which capsule to draw" }]
+    },
+
+    {
+      "id": "finish",
+      "group": "finish",
+      "name": "Finish",
+      "says": "Press the shortcut again or Finish; a press within 0.4 s of the start is ignored.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "docs": ["README.md#capture-controls"]
+    },
+    {
+      "id": "copied",
+      "group": "finish",
+      "name": "Copied, with a Paste chip",
+      "says": "The summary text goes to the clipboard and the capsule shows Copied with a Paste chip; drag the chip onto a window to paste there.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "docs": ["README.md#capture-controls"]
+    },
+    {
+      "id": "paste-shortcut",
+      "group": "finish",
+      "name": "Paste the latest capture",
+      "says": "⌥⇧V pastes the contact sheet and then the summary into the app in front.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "shortcuts": [{ "keys": "⌥⇧V", "does": "Paste the latest capture (Alt+Shift+V on Windows and Linux)" }],
+      "docs": ["README.md#capture-controls"]
+    },
+    {
+      "id": "clipboard-image",
+      "group": "finish",
+      "name": "Image and text on one clipboard",
+      "says": "Copies the contact sheet with the text, so one Ctrl+V attaches the image in a browser or Electron composer.",
+      "status": "experiment:clipboardImage",
+      "platforms": ["windows"],
+      "added": "2026-10-20",
+      "pr": 68,
+      "docs": ["docs/keyframes-and-text.md"]
+    },
+    {
+      "id": "review-window",
+      "group": "finish",
+      "name": "Review window",
+      "says": "Open Latest Capture shows the bundle's keyframes and timeline in a window.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "docs": ["README.md#usage"]
+    },
+    {
+      "id": "recover",
+      "group": "finish",
+      "name": "Recover unbuilt captures",
+      "says": "A capture whose bundle never got built (the app died first) is built at the next launch.",
+      "status": "stable@0.3.12",
+      "platforms": ["mac", "windows", "linux"],
+      "docs": ["docs/windows.md"]
+    },
+    {
+      "id": "capture-stack",
+      "group": "finish",
+      "name": "Capture stack",
+      "says": "The finished frame flies into a card under the capsule or at the screen edge, to drag, open or send.",
+      "status": "branch:proto/capture-stack",
+      "platforms": ["mac"],
+      "added": "2026-10-19",
+      "flag": "captureStack, captureStackEdge"
+    },
+    {
+      "id": "on-capture",
+      "group": "finish",
+      "name": "Run a command per capture",
+      "says": "Runs your own command once each bundle is written, so any agent or script can receive captures.",
+      "status": "review:#43",
+      "platforms": ["mac", "windows", "linux"],
+      "added": "2026-10-20",
+      "pr": 43,
+      "config": [
+        { "key": "onCapture", "value": "[\"/abs/cmd\", \"{bundle}\"]", "does": "Command to run for each capture" },
+        { "key": "onCaptureTimeoutSeconds", "value": "120", "does": "Its time limit" }
+      ]
+    },
+
+    {
+      "id": "bundle",
+      "group": "agent",
+      "name": "The bundle",
+      "says": "A .scrawl folder with contact-sheet.png, frames/, summary.md, scrawl.json, the recording and audio.wav.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "docs": ["skills/scrawl/SKILL.md"]
+    },
+    {
+      "id": "contact-sheet",
+      "group": "agent",
+      "name": "Contact sheet and frames",
+      "says": "Keyframes in time order, each with a number chip, the ink and click ripples drawn on, and no captions.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "docs": ["docs/keyframes-and-text.md"]
+    },
+    {
+      "id": "keyframes",
+      "group": "agent",
+      "name": "Keyframe selection",
+      "says": "Keyframes are cut on marks, clicks, flags and settled screen changes, never on speech pauses: 6 up to 40 s, at most 12.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "docs": ["docs/keyframes-and-text.md"]
+    },
+    {
+      "id": "summary",
+      "group": "agent",
+      "name": "summary.md",
+      "says": "Each keyframe line gives what was done and the words said while it was on screen, split at clause boundaries.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "docs": ["skills/scrawl/SKILL.md", "docs/keyframes-and-text.md"]
+    },
+    {
+      "id": "spoken-cues",
+      "group": "agent",
+      "name": "Spoken cues",
+      "says": "Saying “now”, “here”, “look” or “watch” cuts a keyframe when that screen differs from the ones already chosen.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "note": "Needs measured word times, so not from a Hex transcript.",
+      "docs": ["README.md#transcription"]
+    },
+    {
+      "id": "mark-numbers",
+      "group": "agent",
+      "name": "Numbered marks",
+      "says": "Several marks on one keyframe are numbered ①② in the text, never on the image; scrawl zoom --mark finds one.",
+      "status": "stable@0.3.7",
+      "platforms": ["mac", "windows", "linux"],
+      "docs": ["docs/keyframes-and-text.md"]
+    },
+    {
+      "id": "agent-context",
+      "group": "agent",
+      "name": "Agent context",
+      "says": "The summary names what clicks and marks land on, from Accessibility (UI Automation on Windows) and dev-page events.",
+      "status": "experiment:agentContext",
+      "platforms": ["mac", "windows"],
+      "added": "2026-10-19",
+      "docs": ["docs/keyframes-and-text.md"]
+    },
+    {
+      "id": "screen-text",
+      "group": "agent",
+      "name": "Text under marks",
+      "says": "Reads the text under a mark or drag with Vision when Accessibility can't name it (with agentContext).",
+      "status": "review:#56",
+      "platforms": ["mac"],
+      "added": "2026-10-21",
+      "pr": 56
+    },
+    {
+      "id": "apple-speech",
+      "group": "agent",
+      "name": "Apple Speech",
+      "says": "On-device transcription with word times: SpeechAnalyzer on macOS 26, SFSpeechRecognizer on macOS 15.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac"],
+      "note": "Windows and Linux use Parakeet on device.",
+      "config": [
+        { "key": "transcriber", "value": "\"apple\" | \"hex\" | \"command\"", "does": "Which engine transcribes" },
+        { "key": "appleLocale", "value": "\"zh-TW\"", "does": "Apple Speech language; absent follows the Mac" }
+      ],
+      "docs": ["README.md#transcription"]
+    },
+    {
+      "id": "parakeet",
+      "group": "agent",
+      "name": "Parakeet on device",
+      "says": "Transcribes with Hex's Parakeet model, or downloads Scrawl's own copy (730 MB) at first launch.",
+      "status": "stable@0.3.6",
+      "platforms": ["windows", "linux"],
+      "docs": ["docs/windows.md"]
+    },
+    {
+      "id": "hex",
+      "group": "agent",
+      "name": "Hex",
+      "says": "Transcribes with whichever model a running Hex has ready; falls back to Apple Speech if Hex fails.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac"],
+      "note": "Hex's local API is Mac only.",
+      "config": [
+        { "key": "hexModel", "value": "\"parakeet_v3\"", "does": "Hex model to use" },
+        { "key": "hexLanguage", "value": "\"en\" | \"nl\" | \"auto\"", "does": "Language sent to Hex" }
+      ],
+      "docs": ["README.md#apple-or-hex"]
+    },
+    {
+      "id": "command-transcriber",
+      "group": "agent",
+      "name": "Your own model",
+      "says": "Runs your own program on the audio and reads a JSON transcript from it.",
+      "status": "stable@0.3.13",
+      "platforms": ["mac"],
+      "note": "Windows keeps the local engine for now.",
+      "config": [
+        { "key": "transcribeCommand", "value": "[\"/abs/cmd\", \"{audio}\"]", "does": "Program to run" },
+        { "key": "transcribeTimeoutSeconds", "value": "600", "does": "Its time limit" }
+      ],
+      "docs": ["README.md#your-own-model-command"]
+    },
+
+    {
+      "id": "devsite-routing",
+      "group": "delivery",
+      "name": "Dev-site captures to their session",
+      "says": "A capture that ends on a localhost dev site goes to that project's newest OpenCode session, and is still copied.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac"],
+      "note": "Reads the browser's tab URL, which only the Mac does; /sdk.js registrations route everywhere.",
+      "config": [{ "key": "autoSend", "value": "false", "does": "Keep dev-site captures on the clipboard" }],
+      "docs": ["README.md#sending-captures-of-a-dev-site-to-its-session", "docs/iphone-and-routing.md"]
+    },
+    {
+      "id": "sdk-js",
+      "group": "delivery",
+      "name": "/sdk.js page registration",
+      "says": "A dev page that loads Scrawl's /sdk.js names its session or project folder.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "docs": ["README.md#sending-captures-of-a-dev-site-to-its-session"]
+    },
+    {
+      "id": "smart-routing",
+      "group": "delivery",
+      "name": "Smart routing",
+      "says": "Weighs more clues (tab, Ghostty pane, window title, transcript) and sends with a 3 s undo, or offers a choice.",
+      "status": "experiment:smartRouting",
+      "platforms": ["mac"],
+      "added": "2026-10-19",
+      "config": [{ "key": "routing", "value": "{\"apps\": {…}, \"servers\": {…}}", "does": "Checkouts for apps and folders for file servers" }],
+      "docs": ["docs/routing.md"]
+    },
+    {
+      "id": "delivery-retries",
+      "group": "delivery",
+      "name": "Retries",
+      "says": "A send OpenCode didn't take is retried every 15 s, backing off to 30 min, for a day.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "docs": ["docs/iphone-and-routing.md"]
+    },
+    {
+      "id": "agent-host",
+      "group": "delivery",
+      "name": "Agent on another Mac",
+      "says": "Sends captures to the OpenCode server on another Mac over SSH, copying the bundle there first.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows"],
+      "config": [
+        { "key": "agentHost", "value": "\"studio\"", "does": "SSH host whose OpenCode holds the sessions" },
+        { "key": "agentOpencode", "value": "\"opencode2\"", "does": "The opencode command on that host" }
+      ]
+    },
+    {
+      "id": "remote-agents",
+      "group": "delivery",
+      "name": "Agents on other machines",
+      "says": "Syncs captures to remote agent hosts and pastes the remote paths.",
+      "status": "branch:feat/remote-agents",
+      "platforms": ["mac"],
+      "added": "2026-10-21",
+      "pr": 65,
+      "config": [{ "key": "agentPath", "value": "path", "does": "Where captures go on the remote host" }]
+    },
+    {
+      "id": "security-defaults",
+      "group": "delivery",
+      "name": "Safer delivery defaults",
+      "says": "Ingest listens on loopback only, automatic delivery becomes opt-in, and pairing changes ask first.",
+      "status": "review:#27",
+      "platforms": ["mac", "windows", "linux"],
+      "added": "2026-10-20",
+      "pr": 27
+    },
+
+    {
+      "id": "cabled-iphone",
+      "group": "iphone",
+      "name": "Cabled iPhone",
+      "says": "Pick iPhone with a phone plugged in: a mirror opens, the phone's own video records with your narration, and ink works over the mirror.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac"],
+      "note": "Needs AVFoundation's screen capture devices.",
+      "shortcuts": [{ "keys": "M", "does": "Flag a moment (iPhone mirror focused)" }],
+      "docs": ["README.md#iphone", "docs/iphone-and-routing.md"]
+    },
+    {
+      "id": "scrawlkit",
+      "group": "iphone",
+      "name": "ScrawlKit",
+      "says": "A Swift package for your iOS app: a three-finger long press records the app with narration, touches, strokes and events.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac"],
+      "note": "iOS 18+; recordings go to Scrawl on a Mac.",
+      "docs": ["README.md#scrawlkit-ios"]
+    },
+    {
+      "id": "scrawlkit-https",
+      "group": "iphone",
+      "name": "HTTPS endpoint and outbox",
+      "says": "A setup link can point at an HTTPS endpoint; recordings queue on the phone and upload in the background with retries.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac"],
+      "note": "Phone side; no Mac needed.",
+      "docs": ["README.md#sending-to-an-https-endpoint"]
+    },
+    {
+      "id": "scrawlkit-context",
+      "group": "iphone",
+      "name": "App context",
+      "says": "The app names its screen and adds key/values, which the summary shows beside each keyframe.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac"],
+      "note": "Phone side.",
+      "docs": ["README.md#app-context"]
+    },
+    {
+      "id": "scrawlkit-hooks",
+      "group": "iphone",
+      "name": "Host app hooks",
+      "says": "A team endpoint, a timeline supplement and a submit hook let a host app handle recordings itself.",
+      "status": "stable@0.3.14",
+      "platforms": ["mac"],
+      "added": "2026-10-21",
+      "note": "Phone side.",
+      "pr": 83
+    },
+    {
+      "id": "pairing",
+      "group": "iphone",
+      "name": "Pairing link",
+      "says": "scrawl link prints a setup link and QR code with this Mac's Tailscale and LAN addresses; usbApps adds a cabled fallback.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac"],
+      "note": "The iPhone path is Mac only.",
+      "config": [
+        { "key": "ingestToken", "value": "generated", "does": "Bearer token for phone uploads" },
+        { "key": "usbApps", "value": "[\"com.example.App\"]", "does": "Apps whose recordings come over USB" }
+      ],
+      "docs": ["README.md#scrawlkit-ios"]
+    },
+    {
+      "id": "import",
+      "group": "iphone",
+      "name": "Import a recording",
+      "says": "scrawl import builds a bundle from an AirDropped .mp4 and its timeline.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac"],
+      "note": "The iPhone path is Mac only.",
+      "docs": ["README.md#scrawlkit-ios"]
+    },
+    {
+      "id": "serve",
+      "group": "iphone",
+      "name": "Headless ingest",
+      "says": "scrawl serve takes ScrawlKit uploads on an always-on Mac without the app running.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac"],
+      "note": "The iPhone path is Mac only.",
+      "docs": ["README.md#headless-ingest-server-scrawl-serve"]
+    },
+
+    {
+      "id": "settings-window",
+      "group": "settings",
+      "name": "Settings window",
+      "says": "General, Recording, Storage, Permissions, Agents and About, from the menu's Settings….",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "docs": ["README.md#settings", "docs/onboarding-and-settings.md"]
+    },
+    {
+      "id": "custom-shortcuts",
+      "group": "settings",
+      "name": "Custom shortcuts",
+      "says": "Record new keys for Record and Paste; Scrawl turns down combinations the system or another app uses, and Paste can be turned off.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "config": [{ "key": "shortcuts", "value": "{\"record\": …, \"paste\": null}", "does": "Both shortcuts; paste null turns it off" }],
+      "docs": ["README.md#settings"]
+    },
+    {
+      "id": "launch-at-login",
+      "group": "settings",
+      "name": "Launch at login",
+      "says": "A switch in General.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "docs": ["README.md#settings"]
+    },
+    {
+      "id": "microphone",
+      "group": "settings",
+      "name": "Microphone",
+      "says": "Pick an input with a live level meter; a missing device falls back to the default and says so.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac"],
+      "note": "Windows and Linux record from the default input.",
+      "config": [{ "key": "microphone", "value": "{\"id\", \"name\"}", "does": "Chosen input; absent follows the system" }],
+      "docs": ["README.md#settings"]
+    },
+
+    {
+      "id": "retention",
+      "group": "storage",
+      "name": "Keep recordings",
+      "says": "Video and audio go to the Trash after 7 days and whole bundles after 30; Settings › Storage picks 7, 30 days or Forever.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "config": [{ "key": "retention", "value": "{\"mediaDays\": 7, \"bundleDays\": 30}", "does": "How long to keep media and bundles; null keeps forever" }],
+      "docs": ["README.md#keeping-captures-small", "docs/export-and-retention.md"]
+    },
+    {
+      "id": "retention-hourly",
+      "group": "storage",
+      "name": "Hourly cleanup",
+      "says": "Cleanup passes run hourly instead of daily and take zoom/ sheets with the media.",
+      "status": "stable@0.3.14",
+      "platforms": ["mac", "windows", "linux"],
+      "added": "2026-10-21",
+      "pr": 79,
+      "docs": ["docs/export-and-retention.md"]
+    },
+    {
+      "id": "pin",
+      "group": "storage",
+      "name": "Pin a capture",
+      "says": "scrawl pin keeps a capture out of cleanup; scrawl clean --dry-run shows what a pass would do.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "docs": ["README.md#keeping-captures-small"]
+    },
+    {
+      "id": "iphone-shrink",
+      "group": "storage",
+      "name": "Shrink iPhone video",
+      "says": "A minute after a cabled capture, its video is re-encoded to HEVC at 1600 px (750 MB to 72 MB in one test).",
+      "status": "stable@0.3.4",
+      "platforms": ["mac"],
+      "note": "The iPhone path is Mac only.",
+      "docs": ["README.md#keeping-captures-small"]
+    },
+    {
+      "id": "captures-dir",
+      "group": "storage",
+      "name": "Choose the captures folder",
+      "says": "Settings › Storage picks where new captures go instead of Application Support; an unusable folder falls back to the built-in one.",
+      "status": "stable@0.3.14",
+      "platforms": ["mac", "windows", "linux"],
+      "added": "2026-10-22",
+      "note": "The Change… button is Mac only; elsewhere set capturesDir.",
+      "pr": 86,
+      "docs": ["README.md#settings"],
+      "config": [{ "key": "capturesDir", "value": "\"~/Scrawl\"", "does": "Where captures are written" }]
+    },
+
+    {
+      "id": "cli-install",
+      "group": "cli",
+      "name": "Command-line tool",
+      "says": "Settings › Agents links scrawl onto PATH and it always runs the app's current copy; Homebrew links it too.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "note": "Windows gets a scrawl.cmd shim.",
+      "docs": ["README.md#agents"]
+    },
+    {
+      "id": "skill",
+      "group": "cli",
+      "name": "Agent skill",
+      "says": "bunx skills add kitlangton/scrawl teaches an agent to read a paste and use the CLI; scrawl skill prints it.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "docs": ["skills/scrawl/SKILL.md"]
+    },
+    {
+      "id": "cli-zoom",
+      "group": "cli",
+      "name": "scrawl zoom",
+      "says": "A dense sheet of frames around a time, a phrase that was said, or a numbered mark.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "docs": ["skills/scrawl/SKILL.md"]
+    },
+    {
+      "id": "cli-read",
+      "group": "cli",
+      "name": "inspect and frames",
+      "says": "Print summary.md, scrawl.json or the marks; pull plain PNGs of a time range.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "docs": ["skills/scrawl/SKILL.md"]
+    },
+    {
+      "id": "cli-send",
+      "group": "cli",
+      "name": "send and route",
+      "says": "Queue a capture into a session (refusing a different one than recorded without --reroute); see where a URL would route.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "docs": ["skills/scrawl/SKILL.md", "README.md#sending-captures-of-a-dev-site-to-its-session"]
+    },
+    {
+      "id": "cli-reprocess",
+      "group": "cli",
+      "name": "reprocess",
+      "says": "Rebuild a bundle with the current rules, another transcriber, or an experiment turned on.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "docs": ["README.md#usage"]
+    },
+    {
+      "id": "autocrop-playground",
+      "group": "cli",
+      "name": "Auto-crop playground",
+      "says": "scrawl autocrop --serve opens sliders that run the real crop on a capture and copy the settings as JSON.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "docs": ["README.md#auto-crop-screen-captures"]
+    },
+
+    {
+      "id": "export-cli",
+      "group": "export",
+      "name": "scrawl export",
+      "says": "One .mp4 with ink, pins and clicks burned in, cropped to the activity, audio in sync; --zoom eases toward clicks and marks.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac"],
+      "note": "Rendered with AVFoundation in the helper.",
+      "docs": ["README.md#export-as-video", "docs/export-and-retention.md"]
+    },
+    {
+      "id": "export-menu",
+      "group": "export",
+      "name": "Export from the menu",
+      "says": "Export Last Capture as Video… saves to ~/Movies/Scrawl with progress beside the menu bar icon.",
+      "status": "experiment:videoExport",
+      "platforms": ["mac"],
+      "added": "2026-10-18",
+      "config": [{ "key": "videoExport", "value": "true", "does": "Show Export Last Capture as Video… (Settings › Recording › Experimental)" }],
+      "docs": ["README.md#export-as-video"]
+    },
+
+    {
+      "id": "mac-download",
+      "group": "install",
+      "name": "Mac download and Homebrew",
+      "says": "A notarized DMG for Apple silicon, or brew install --cask kitlangton/tap/scrawl.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac"],
+      "note": "Windows has its own zip.",
+      "docs": ["README.md#install", "docs/release.md"]
+    },
+    {
+      "id": "sparkle",
+      "group": "install",
+      "name": "Automatic updates",
+      "says": "The Mac app updates itself with Sparkle; Check for Updates… is in the menu and Settings › About.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac"],
+      "note": "On Windows and Linux, Check for Updates… opens the releases page.",
+      "docs": ["docs/release.md"]
+    },
+    {
+      "id": "windows-zip",
+      "group": "install",
+      "name": "Windows zip",
+      "says": "scrawl.exe for Windows 10 (2004) and later on x64, unsigned, without automatic updates.",
+      "status": "stable@0.3.6",
+      "platforms": ["windows"],
+      "docs": ["README.md#windows", "docs/windows.md"]
+    },
+    {
+      "id": "linux-appimage",
+      "group": "install",
+      "name": "Linux AppImage",
+      "says": "AppImages for x86_64 and aarch64 (Ubuntu 24.04+), published by hand as linux-preview-N.",
+      "status": "branch:feat/linux",
+      "platforms": ["linux"],
+      "added": "2026-10-19",
+      "pr": 24
+    },
+    {
+      "id": "aur",
+      "group": "install",
+      "name": "AUR package",
+      "says": "yay -S scrawl-linux-bin installs the AppImage with a scrawl command.",
+      "status": "review:#81",
+      "platforms": ["linux"],
+      "added": "2026-10-22",
+      "pr": 81
+    },
+    {
+      "id": "onboarding",
+      "group": "install",
+      "name": "Welcome tour",
+      "says": "A welcome, an 11 s demo of ⌥⇧S, one permissions checklist and a first capture; it resumes where any quit left it.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac", "windows", "linux"],
+      "config": [{ "key": "onboarding", "value": "{…}", "does": "Tour progress; delete it to replay the tour" }],
+      "docs": ["README.md#welcome-and-permissions", "docs/onboarding-and-settings.md"]
+    },
+    {
+      "id": "permission-card",
+      "group": "install",
+      "name": "Drag-in permission card",
+      "says": "For Screen Recording and Accessibility, a card flies to System Settings so you drag Scrawl into the list.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac"],
+      "note": "Windows only asks for the microphone switch; Linux Wayland asks for the input group.",
+      "docs": ["README.md#welcome-and-permissions"]
+    },
+    {
+      "id": "self-relaunch",
+      "group": "install",
+      "name": "Reopens after a grant",
+      "says": "If a Screen Recording grant doesn't reach the running app, Scrawl reopens itself on the same screen.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac"],
+      "note": "Only macOS caches the grant.",
+      "docs": ["README.md#welcome-and-permissions"]
+    },
+
+    {
+      "id": "macos",
+      "group": "platforms",
+      "name": "macOS",
+      "says": "Apple silicon, macOS 15 or later; live transcription and Liquid Glass need macOS 26.",
+      "status": "stable@0.3.4",
+      "platforms": ["mac"],
+      "docs": ["README.md#install"]
+    },
+    {
+      "id": "windows",
+      "group": "platforms",
+      "name": "Windows",
+      "says": "Windows 10 (2004) and later on x64: the same app, without the iPhone, export, Sparkle or the tab URL.",
+      "status": "stable@0.3.6",
+      "platforms": ["windows"],
+      "docs": ["README.md#windows", "docs/windows.md"]
+    },
+    {
+      "id": "linux",
+      "group": "platforms",
+      "name": "Linux preview",
+      "says": "X11, and GNOME and KDE on Wayland through XWayland; without the iPhone, export, agent context, Sparkle or the tab URL.",
+      "status": "branch:feat/linux",
+      "platforms": ["linux"],
+      "added": "2026-10-19",
+      "pr": 24
+    }
+  ]
+}

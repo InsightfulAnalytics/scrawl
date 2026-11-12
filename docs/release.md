@@ -3,7 +3,8 @@
 Everything lands on `main` through pull requests, the version bump and the appcast included. A release
 is one Mac build (notarized DMG + Sparkle zip) and one Windows zip, built from the same tagged commit.
 
-1. **Version:** bump `version` in `Cargo.toml` and `Cargo.lock` in a `release/<version>` PR. Pushing a
+1. **Version:** bump `version` in `Cargo.toml` and `Cargo.lock` in a `release/<version>` PR, and in the
+   same PR change every `"status": "main"` in `site/src/features.json` to `"stable@<version>"`. Pushing a
    `release/**` branch dry-runs the Windows job (`.github/workflows/release-windows.yml`), which also opens
    the welcome window on a fresh profile and keeps a screenshot.
 2. **Mac build** (Studio, from that commit): `SCRAWL_BUILD_NUMBER=<n> SCRAWL_SPARKLE_DIR=~/.local/share/scrawl-release/sparkle-2.9.4 ./scripts/release-app.sh`.

@@ -1,6 +1,7 @@
 import { defineConfig, type Plugin } from "vite"
 import react from "@vitejs/plugin-react"
 import { agentFiles, jsonLd } from "./scripts/agent-files.ts"
+import { MAP_DIR } from "./scripts/feature-audit.ts"
 
 const TYPES: Record<string, string> = { ".txt": "text/plain; charset=utf-8", ".md": "text/markdown; charset=utf-8" }
 
@@ -25,8 +26,25 @@ function forAgents(): Plugin {
   }
 }
 
+// The feature map in dev; scripts/prerender.ts writes it for builds.
+function featureMap(): Plugin {
+  return {
+    name: "scrawl-feature-map",
+    configureServer(server) {
+      server.middlewares.use(async (req, res, next) => {
+        const path = req.url?.split("?")[0] ?? ""
+        if (path !== `/${MAP_DIR}` && path !== `/${MAP_DIR}/`) return next()
+        const { audit } = await server.ssrLoadModule("/scripts/feature-audit.ts")
+        const { mapPage } = await server.ssrLoadModule("/src/map/page.tsx")
+        res.setHeader("Content-Type", "text/html; charset=utf-8")
+        res.end(mapPage(audit()))
+      })
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [react(), forAgents()],
+  plugins: [react(), forAgents(), featureMap()],
   // three.js lives in the lazily loaded hero brush chunk.
   build: { chunkSizeWarningLimit: 700 },
   // Previews are shared over Tailscale (studio.*.ts.net).

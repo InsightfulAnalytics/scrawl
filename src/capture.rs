@@ -1747,7 +1747,11 @@ mod tests {
         );
         assert_eq!(
             hotkey_combos(ShortcutKind::Record, &default).len(),
-            if u32::from(KEY_S) == default.key_code { 4 } else { 8 },
+            if u32::from(KEY_S) == default.key_code {
+                4
+            } else {
+                8
+            },
             "⌥⇧S and three aliases, on the layout's key and the ANSI one"
         );
 
@@ -1900,7 +1904,6 @@ mod tests {
         telemetry
     }
 
-
     #[test]
     fn a_long_still_shift_press_drops_no_pin() {
         let down = (1_000, 10.0, 10.0);
@@ -1981,7 +1984,6 @@ mod tests {
         assert_eq!(strokes[0].pin, Some(1));
         assert_eq!(strokes[0].normalized_points(), vec![[0.25, 0.75]]);
     }
-
 
     #[test]
     fn candidate_buffer_stays_bounded_and_keeps_the_whole_timeline() {
