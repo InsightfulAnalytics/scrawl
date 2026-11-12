@@ -1,6 +1,8 @@
-//! Text and PNG through X11 selections, except on KDE Wayland: KWin does not reliably bridge
-//! a background XWayland owner's selection to native apps. There we use wl-copy's data-control
-//! protocol (bundled in the AppImage). Both backends keep an owner alive to serve the data.
+//! Text and PNG through X11 selections on X11 and GNOME, and through wl-copy's data-control
+//! protocol (bundled in the AppImage) on KDE Wayland and Hyprland: KWin does not reliably bridge
+//! a background XWayland owner's selection to native apps, and on Hyprland native apps are most
+//! of the desktop, so the clipboard is set on the Wayland side directly. Both backends keep an
+//! owner alive to serve the data.
 
 use std::io::Write as _;
 use std::process::{Command, Stdio};
@@ -21,15 +23,24 @@ fn with<T>(f: impl FnOnce(&mut arboard::Clipboard) -> Result<T, arboard::Error>)
     f(clipboard).map_err(|e| anyhow!("Clipboard: {e}"))
 }
 
+/// Whether to set the clipboard on the Wayland side (`wl-copy`) rather than through XWayland.
+fn native_wayland_clipboard() -> bool {
+    match super::session() {
+        super::Session::Hyprland => true,
+        super::Session::Wayland => super::kde(),
+        super::Session::X11 => false,
+    }
+}
+
 pub fn set_text(text: &str) -> Result<()> {
-    if super::kde() && super::wayland_session() {
+    if native_wayland_clipboard() {
         return copy_wayland("text/plain;charset=utf-8", text.as_bytes());
     }
     with(|c| c.set_text(text.to_owned()))
 }
 
 pub fn set_png(png_bytes: &[u8]) -> Result<()> {
-    if super::kde() && super::wayland_session() {
+    if native_wayland_clipboard() {
         return copy_wayland("image/png", png_bytes);
     }
     let decoder = png::Decoder::new(std::io::Cursor::new(png_bytes));

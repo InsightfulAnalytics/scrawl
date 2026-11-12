@@ -55,7 +55,7 @@ pub fn source_for(target: &TargetInfo, stopping: &AtomicBool) -> Result<Source> 
     }
     // Hyprland lists every window (`linux::hyprland`), native ones too, so a window is
     // recorded as its rect on the display the portal shares, which is remembered per display.
-    if super::hyprland::active() {
+    if super::session() == super::Session::Hyprland {
         return hyprland_source(target, rect, stopping);
     }
     // An X11 app's window on XWayland can be read like on X11.
@@ -79,15 +79,31 @@ pub fn source_for(target: &TargetInfo, stopping: &AtomicBool) -> Result<Source> 
     let session = portal_screencast(window, stopping)?;
     // The portal records a whole display: keep the part that was asked for.
     let crop = match (target.mode, session.rect) {
-        (CaptureMode::Region, Some([sx, sy, sw, sh])) if sw > 0.0 && sh > 0.0 => Some([
-            (rect[0] - sx).max(0.0) as u32,
-            (rect[1] - sy).max(0.0) as u32,
-            rect[2].min(sw) as u32,
-            rect[3].min(sh) as u32,
-        ]),
+        (CaptureMode::Region, Some(shared)) => crop_within(rect, shared),
         _ => None,
     };
     Ok(Source::PipeWire { session, crop })
+}
+
+/// `rect` (global pixels) as a crop of the shared display at `shared`: its offset into the
+/// display and its size, clamped to the display, with even sizes for H.264. `None` when the
+/// display's size isn't known.
+fn crop_within(rect: [f64; 4], shared: [f64; 4]) -> Option<[u32; 4]> {
+    let [sx, sy, sw, sh] = shared;
+    if sw <= 0.0 || sh <= 0.0 {
+        return None;
+    }
+    let x = (rect[0] - sx).clamp(0.0, sw);
+    let y = (rect[1] - sy).clamp(0.0, sh);
+    let w = rect[2].min(sw - x).max(2.0);
+    let h = rect[3].min(sh - y).max(2.0);
+    Some([x as u32, y as u32, (w as u32) & !1, (h as u32) & !1])
+}
+
+/// The `portal.json` key for a display's restore token on Hyprland (`screencast@0,0,2560x1440`).
+fn display_token_key(rect: [f64; 4]) -> String {
+    let [x, y, w, h] = rect.map(|v| v.round() as i64);
+    format!("screencast@{x},{y},{w}x{h}")
 }
 
 /// Hyprland: the display under `rect`'s centre through the ScreenCast portal, cropped to `rect`
@@ -96,47 +112,38 @@ pub fn source_for(target: &TargetInfo, stopping: &AtomicBool) -> Result<Source> 
 /// asks which to share, later ones start without asking.
 fn hyprland_source(target: &TargetInfo, rect: [f64; 4], stopping: &AtomicBool) -> Result<Source> {
     let monitor = super::monitor_at(rect[0] + rect[2] / 2.0, rect[1] + rect[3] / 2.0);
-    let key = monitor.as_ref().map_or_else(
-        || "screencast".to_owned(),
-        |m| {
-            let [x, y, w, h] = m.rect.map(|v| v.round() as i64);
-            format!("screencast@{x},{y},{w}x{h}")
-        },
-    );
+    let key = monitor
+        .as_ref()
+        .map_or_else(|| "screencast".to_owned(), |m| display_token_key(m.rect));
     let mut session = portal_screencast_keyed(false, &key, stopping)?;
-    // The shared display, when the portal doesn't say where it is: the display Scrawl asked for
-    // if the sizes agree, else the display that size matches.
-    if let Some([_, _, sw, sh]) = session.rect.filter(|r| r[0] == 0.0 && r[1] == 0.0) {
-        let same = |m: &super::Monitor| (m.rect[2] - sw).abs() < 1.0 && (m.rect[3] - sh).abs() < 1.0;
-        let shared = monitor
-            .clone()
-            .filter(|m| same(m))
-            .or_else(|| super::monitors().into_iter().find(|m| same(m)));
-        if let Some(m) = shared {
-            session.rect = Some(m.rect);
+    // Where the shared display is. Hyprland's portal reports every display at (0, 0), so it's
+    // found by its size, the display Scrawl asked for first; with no size either, it's assumed
+    // to be the one asked for.
+    session.rect = match session.rect {
+        Some([x, y, sw, sh]) if x == 0.0 && y == 0.0 => {
+            let same =
+                |m: &super::Monitor| (m.rect[2] - sw).abs() < 1.0 && (m.rect[3] - sh).abs() < 1.0;
+            monitor
+                .clone()
+                .filter(|m| same(m))
+                .or_else(|| super::monitors().into_iter().find(|m| same(m)))
+                .map(|m| m.rect)
+                .or(session.rect)
         }
-    }
+        Some(rect) => Some(rect),
+        None => monitor.as_ref().map(|m| m.rect),
+    };
     if let (Some(shared), Some(asked)) = (session.rect, monitor.as_ref())
         && ((shared[0] - asked.rect[0]).abs() >= 1.0 || (shared[1] - asked.rect[1]).abs() >= 1.0)
     {
         // The person shared another display than the one under the pointer: the token just
         // saved restores that display, so it's kept under that display's key.
         scrawl_log(format!("portal: shared {shared:?}, not the display at {:?}", asked.rect));
-        let [x, y, w, h] = shared.map(|v| v.round() as i64);
-        save_token(&format!("screencast@{x},{y},{w}x{h}"), saved_token(&key).as_deref());
+        save_token(&display_token_key(shared), saved_token(&key).as_deref());
         save_token(&key, None);
     }
     let crop = match (target.mode, session.rect) {
-        (CaptureMode::Region | CaptureMode::Window, Some([sx, sy, sw, sh]))
-            if sw > 0.0 && sh > 0.0 =>
-        {
-            let x = (rect[0] - sx).clamp(0.0, sw);
-            let y = (rect[1] - sy).clamp(0.0, sh);
-            let w = rect[2].min(sw - x).max(1.0);
-            let h = rect[3].min(sh - y).max(1.0);
-            // H.264 wants even sizes.
-            Some([x as u32, y as u32, (w as u32) & !1, (h as u32) & !1])
-        }
+        (CaptureMode::Region | CaptureMode::Window, Some(shared)) => crop_within(rect, shared),
         _ => None,
     };
     Ok(Source::PipeWire { session, crop })
@@ -481,9 +488,7 @@ const GNOME_PATH: &str = "/org/gnome/settings-daemon/plugins/media-keys/custom-k
 /// `scrawl shortcut record` and `scrawl shortcut paste`, which hand the press to the running app
 /// (`super::ipc`). Only Scrawl's own two entries are written or changed.
 pub fn bind_gnome_keybindings(bindings: &[(&str, String)]) -> Result<()> {
-    let exe = std::env::var_os("APPIMAGE")
-        .map(PathBuf::from)
-        .map_or_else(std::env::current_exe, Ok)?;
+    let exe = super::app_executable()?;
     let gsettings = |args: &[&str]| -> Result<String> {
         let out = std::process::Command::new("gsettings")
             .args(args)
@@ -607,6 +612,16 @@ mod tests {
         // A cleared paste shortcut is not requested, so only record has to come back.
         assert!(shortcuts_bound(false, [record].into_iter()));
         assert!(!shortcuts_bound(false, [].into_iter()));
+    }
+
+    #[test]
+    fn crops_stay_inside_the_shared_display_with_even_sizes() {
+        let display = [2560.0, 0.0, 2560.0, 1080.0];
+        assert_eq!(crop_within([2570.0, 10.0, 301.0, 201.0], display), Some([10, 10, 300, 200]));
+        // A window hanging off the right edge is cut at the edge.
+        assert_eq!(crop_within([4900.0, 0.0, 400.0, 100.0], display), Some([2340, 0, 220, 100]));
+        assert_eq!(crop_within([0.0, 0.0, 10.0, 10.0], [0.0, 0.0, 0.0, 0.0]), None);
+        assert_eq!(display_token_key(display), "screencast@2560,0,2560x1080");
     }
 
     #[test]

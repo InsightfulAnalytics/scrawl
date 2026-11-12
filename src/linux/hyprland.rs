@@ -24,10 +24,7 @@ use crate::capture::scrawl_log;
 
 fn socket_dir() -> Option<PathBuf> {
     let signature = std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").filter(|s| !s.is_empty())?;
-    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(format!("/run/user/{}", unsafe { libc::getuid() })));
-    let dir = runtime.join("hypr").join(signature);
+    let dir = super::runtime_dir().join("hypr").join(signature);
     dir.join(".socket.sock").exists().then_some(dir)
 }
 
@@ -127,6 +124,9 @@ pub struct Client {
     pub pid: i64,
     #[serde(default)]
     pub floating: bool,
+    /// Shown on every workspace, above the rest.
+    #[serde(default)]
+    pub pinned: bool,
     #[serde(default, rename = "focusHistoryID")]
     pub focus_history_id: i64,
 }
@@ -137,26 +137,18 @@ impl Client {
         rect_to_root([self.at[0], self.at[1], self.size[0], self.size[1]])
     }
 
+    /// The owning process, or 0 when Hyprland doesn't know it.
     pub fn pid(&self) -> u32 {
         u32::try_from(self.pid).unwrap_or(0)
     }
 
-    /// A stand-in for an X11 window id: the address's low 31 bits, with the top bit set so
-    /// it never collides with a real X id (XWayland's are small). `window_for_id` reads it back.
-    pub fn id(&self) -> isize {
-        let raw = u64::from_str_radix(self.address.trim_start_matches("0x"), 16).unwrap_or(0);
-        (0x4000_0000 | (raw as isize & 0x3fff_ffff)) as isize
+    /// The id Scrawl gives this window (`WindowId::Hyprland`); `window_for_id` reads it back.
+    pub fn id(&self) -> super::WindowId {
+        super::WindowId::for_hyprland_address(&self.address)
     }
 }
 
-#[derive(Deserialize)]
-struct Monitor {
-    #[serde(rename = "activeWorkspace")]
-    active_workspace: Workspace,
-    #[serde(rename = "specialWorkspace")]
-    special_workspace: Option<Workspace>,
-}
-
+/// One of Hyprland's outputs, as its `monitors` reply describes it.
 #[derive(Clone, Deserialize)]
 struct Output {
     name: String,
@@ -171,6 +163,10 @@ struct Output {
     reserved: [f64; 4],
     #[serde(default)]
     disabled: bool,
+    #[serde(rename = "activeWorkspace")]
+    active_workspace: Option<Workspace>,
+    #[serde(rename = "specialWorkspace")]
+    special_workspace: Option<Workspace>,
 }
 
 impl Output {
@@ -181,22 +177,16 @@ impl Output {
     }
 }
 
-/// Hyprland's outputs, read at most once a second (`linux::monitors` runs often).
+/// Hyprland's outputs (`linux::monitors` and the pointer ask often; see `once_a_second`).
 fn outputs() -> Vec<Output> {
     static CACHE: Mutex<Option<(std::time::Instant, Vec<Output>)>> = Mutex::new(None);
-    let mut cache = CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some((at, list)) = &*cache
-        && at.elapsed() < Duration::from_secs(1)
-    {
-        return list.clone();
-    }
-    let list: Vec<Output> = json::<Vec<Output>>("monitors")
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|o| !o.disabled)
-        .collect();
-    *cache = Some((std::time::Instant::now(), list.clone()));
-    list
+    super::once_a_second(&CACHE, || {
+        json::<Vec<Output>>("monitors")
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|o| !o.disabled)
+            .collect()
+    })
 }
 
 fn contains(rect: [f64; 4], x: f64, y: f64) -> bool {
@@ -265,19 +255,13 @@ pub fn active_window() -> Option<Client> {
 /// Windows on the workspaces that are showing, front to back (most recently focused first,
 /// floating windows ahead of tiled ones).
 pub fn visible_clients() -> Vec<Client> {
-    let showing: Vec<i64> = json::<Vec<Monitor>>("monitors")
-        .map(|monitors| {
-            monitors
-                .into_iter()
-                .flat_map(|m| {
-                    [Some(m.active_workspace.id), m.special_workspace.map(|w| w.id)]
-                        .into_iter()
-                        .flatten()
-                        .filter(|&id| id != 0)
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let showing: Vec<i64> = outputs()
+        .into_iter()
+        .flat_map(|o| [o.active_workspace, o.special_workspace])
+        .flatten()
+        .map(|w| w.id)
+        .filter(|&id| id != 0)
+        .collect();
     let mut clients: Vec<Client> = json::<Vec<Client>>("clients")
         .unwrap_or_default()
         .into_iter()
@@ -289,11 +273,21 @@ pub fn visible_clients() -> Vec<Client> {
 }
 
 /// The window behind a `Client::id`.
-pub fn window_for_id(id: isize) -> Option<Client> {
+pub fn window_for_id(id: super::WindowId) -> Option<Client> {
     json::<Vec<Client>>("clients")
         .ok()?
         .into_iter()
         .find(|c| c.id() == id)
+}
+
+/// The class of a window `pid` owns (`firefox`, `chrome-…-Default` for a web app), for its
+/// app's name.
+pub fn class_of_pid(pid: u32) -> Option<String> {
+    json::<Vec<Client>>("clients")
+        .ok()?
+        .into_iter()
+        .find(|c| c.pid() == pid && !c.class.is_empty())
+        .map(|c| c.class)
 }
 
 /// Focuses a window by its address, for a paste into the app that was in front.
@@ -350,10 +344,7 @@ static BINDS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
 
 /// The command a bind runs: this executable (or the AppImage) with `shortcut <name>`.
 fn shortcut_command(name: &str) -> String {
-    let exe = std::env::var_os("APPIMAGE")
-        .map(PathBuf::from)
-        .or_else(|| std::env::current_exe().ok())
-        .unwrap_or_else(|| PathBuf::from("scrawl"));
+    let exe = super::app_executable().unwrap_or_else(|_| PathBuf::from("scrawl"));
     format!(
         "{} shortcut {name}",
         shell_word(&exe.to_string_lossy())
@@ -472,7 +463,7 @@ mod tests {
                 "workspace":{"id":1},"class":"kitty","title":"t","pid":7,"tags":["terminal*"]}"#,
         )
         .unwrap();
-        assert!(client.id() >= 0x4000_0000);
+        assert!(matches!(client.id(), super::super::WindowId::Hyprland(_)));
         assert_eq!((client.at, client.size), ([1.0, 2.0], [3.0, 4.0]));
     }
 }

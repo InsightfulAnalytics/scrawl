@@ -2911,8 +2911,7 @@ impl ScrawlCoordinator {
                         Ok(capture) => capture,
                         Err(error) => {
                             scrawl_log(format!("Capture failed: {error:#}"));
-                            #[cfg(target_os = "linux")]
-                            crate::linux::shell::notify("Capture failed", &error.to_string());
+                            platform::notify_capture_failed(&error.to_string());
                             coord.set_island_phase(IslandPhase::Dismissing);
                             cx.notify();
                             return None;

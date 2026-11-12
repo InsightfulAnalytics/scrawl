@@ -11,10 +11,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 
 fn socket_path() -> PathBuf {
-    std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("scrawl.sock")
+    super::runtime_dir().join("scrawl.sock")
 }
 
 /// Sends one line to the running app. `Err` when none is running.

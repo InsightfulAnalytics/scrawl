@@ -48,7 +48,7 @@
       "says": "The menu's picker opens on the pointer's display: drag an area, click a window, or pick Screen or iPhone.",
       "status": "stable@0.3.4",
       "platforms": ["mac", "windows", "linux"],
-      "note": "The Linux preview's Window mode lists X11 windows only.",
+      "note": "The Linux Window mode lists X11 windows only, except on Hyprland, which lists every window.",
       "shortcuts": [
         { "keys": "1–4", "does": "Picker: jump to a mode" },
         { "keys": "Tab / ⇧Tab", "does": "Picker: next or previous mode" },
@@ -517,7 +517,7 @@
       "says": "A Swift package for your iOS app: a three-finger long press records the app with narration, touches, strokes and events.",
       "status": "stable@0.3.4",
       "platforms": ["mac"],
-      "note": "iOS 18+; recordings go to Scrawl on a Mac.",
+      "note": "iOS 18+; recordings go to Scrawl on a Mac over a cable or a hosted HTTPS endpoint (this fork's ingest server listens on loopback only).",
       "docs": ["README.md#scrawlkit-ios"]
     },
     {
@@ -555,8 +555,8 @@
       "id": "pairing",
       "group": "iphone",
       "name": "Pairing link",
-      "says": "scrawl link prints a setup link and QR code with this Mac's Tailscale and LAN addresses; usbApps adds a cabled fallback.",
-      "status": "stable@0.3.4",
+      "says": "scrawl link prints a setup link and QR code for a hosted HTTPS endpoint (--url, required); it never offers this computer's LAN or Tailscale addresses. usbApps adds a cabled fallback.",
+      "status": "main",
       "platforms": ["mac"],
       "note": "The iPhone path is Mac only.",
       "config": [
@@ -579,8 +579,8 @@
       "id": "serve",
       "group": "iphone",
       "name": "Headless ingest",
-      "says": "scrawl serve takes ScrawlKit uploads on an always-on Mac without the app running.",
-      "status": "stable@0.3.4",
+      "says": "scrawl serve takes ScrawlKit uploads without the app running, on 127.0.0.1 only.",
+      "status": "main",
       "platforms": ["mac"],
       "note": "The iPhone path is Mac only.",
       "docs": ["README.md#headless-ingest-server-scrawl-serve"]
@@ -817,6 +817,16 @@
       "pr": 81
     },
     {
+      "id": "linux-local-install",
+      "group": "install",
+      "name": "Install from source on Arch",
+      "says": "scripts/linux/install-local.sh builds Scrawl and installs it in ~/.local with a launcher entry, using the system GStreamer.",
+      "status": "main",
+      "platforms": ["linux"],
+      "added": "2026-11-12",
+      "docs": ["docs/linux.md"]
+    },
+    {
       "id": "onboarding",
       "group": "install",
       "name": "Welcome tour",
@@ -869,11 +879,22 @@
       "id": "linux",
       "group": "platforms",
       "name": "Linux preview",
-      "says": "X11, and GNOME and KDE on Wayland through XWayland; without the iPhone, export, agent context, Sparkle or the tab URL.",
-      "status": "branch:feat/linux",
+      "says": "X11, and GNOME, KDE and Hyprland on Wayland through XWayland; without the iPhone, export, agent context, Sparkle or the tab URL.",
+      "status": "main",
       "platforms": ["linux"],
       "added": "2026-10-19",
       "pr": 24
+    },
+    {
+      "id": "hyprland",
+      "group": "platforms",
+      "name": "Hyprland (Omarchy)",
+      "says": "Scrawl binds Alt+Shift+S and Alt+Shift+V itself, reads the pointer and every window over any app, keeps the pill below the bar and pastes through Hyprland.",
+      "status": "main",
+      "platforms": ["linux"],
+      "added": "2026-11-12",
+      "note": "Clicks and ⇧ ink need the input group, as on any Wayland desktop.",
+      "docs": ["docs/linux.md"]
     }
   ]
 }

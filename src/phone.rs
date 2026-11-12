@@ -1133,52 +1133,6 @@ fn bearer_token(header: &str) -> Option<&str> {
     })
 }
 
-/// Discovers this Mac's candidate Scrawl ingest base URLs on `port`: Tailscale IPv4 first,
-/// followed by `en0` / `en1` LAN IPs.
-pub fn discover_default_ingest_urls(port: u16) -> Vec<String> {
-    let mut urls = Vec::new();
-    let push_ip = |urls: &mut Vec<String>, raw: &str| {
-        for line in raw.lines() {
-            let ip = line.trim();
-            if !ip.is_empty()
-                && ip
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b".-".contains(&b))
-            {
-                let candidate = format!("http://{ip}:{port}");
-                if !urls.contains(&candidate) {
-                    urls.push(candidate);
-                }
-            }
-        }
-    };
-
-    for bin in [
-        "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
-        "tailscale",
-    ] {
-        if let Ok(out) = Command::new(bin).args(["ip", "-4"]).output()
-            && out.status.success()
-        {
-            push_ip(&mut urls, &String::from_utf8_lossy(&out.stdout));
-            if !urls.is_empty() {
-                break;
-            }
-        }
-    }
-
-    for iface in ["en0", "en1"] {
-        if let Ok(out) = Command::new("/usr/sbin/ipconfig")
-            .args(["getifaddr", iface])
-            .output()
-            && out.status.success()
-        {
-            push_ip(&mut urls, &String::from_utf8_lossy(&out.stdout));
-        }
-    }
-    urls
-}
-
 fn normalize_http_base_url(raw: &str) -> Result<String> {
     let trimmed = raw.trim().trim_end_matches('/');
     let lower = trimmed.to_ascii_lowercase();

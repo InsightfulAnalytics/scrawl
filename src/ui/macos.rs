@@ -97,6 +97,9 @@ pub(super) fn hud_pill_origin(display: gpui::Bounds<gpui::Pixels>) -> gpui::Poin
     )
 }
 
+/// No notification for a failed capture on macOS: the pill closes and the log has the error.
+pub(super) fn notify_capture_failed(_error: &str) {}
+
 /// The GPUI pill (`SCRAWL_NATIVE_PILL=0`) stays where it opened on macOS.
 pub(super) fn place_hud_pill(_point: [f64; 2]) {}
 
