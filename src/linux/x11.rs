@@ -188,10 +188,20 @@ pub fn monitors() -> Vec<Monitor> {
                 f64::from(m.width),
                 f64::from(m.height),
             ];
+            // Hyprland sets no `_NET_WORKAREA`; it knows each output's bars by name.
+            let hyprland = || {
+                super::hyprland::active()
+                    .then(|| atom_name(x, m.name))
+                    .flatten()
+                    .and_then(|name| super::hyprland::work_area(&name, rect))
+            };
             Monitor {
                 handle: m.name as isize,
                 rect,
-                work: workarea.and_then(|w| intersect(rect, w)).unwrap_or(rect),
+                work: workarea
+                    .and_then(|w| intersect(rect, w))
+                    .or_else(hyprland)
+                    .unwrap_or(rect),
                 scale,
                 primary: m.primary,
             }
@@ -217,6 +227,48 @@ pub fn monitors() -> Vec<Monitor> {
         list[0].primary = true;
     }
     list.sort_by_key(|m| !m.primary);
+    list
+}
+
+fn atom_name(x: &X, atom: u32) -> Option<String> {
+    let reply = x.conn.get_atom_name(atom).ok()?.reply().ok()?;
+    String::from_utf8(reply.name).ok()
+}
+
+/// Every RandR monitor's output name and rect (root pixels), read at most once a second.
+pub fn randr_monitors() -> Vec<(String, [f64; 4])> {
+    type Cached = Option<(std::time::Instant, Vec<(String, [f64; 4])>)>;
+    static CACHE: std::sync::Mutex<Cached> = std::sync::Mutex::new(None);
+    let mut cache = CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((at, list)) = &*cache
+        && at.elapsed() < std::time::Duration::from_secs(1)
+    {
+        return list.clone();
+    }
+    let Some(x) = x() else {
+        return Vec::new();
+    };
+    let list: Vec<(String, [f64; 4])> = x
+        .conn
+        .randr_get_monitors(x.root, true)
+        .ok()
+        .and_then(|c| c.reply().ok())
+        .map(|reply| reply.monitors)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|m| {
+            let rect = [
+                f64::from(m.x),
+                f64::from(m.y),
+                f64::from(m.width),
+                f64::from(m.height),
+            ];
+            Some((atom_name(x, m.name)?, rect))
+        })
+        .collect();
+    *cache = Some((std::time::Instant::now(), list.clone()));
     list
 }
 

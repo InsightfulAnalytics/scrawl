@@ -24,6 +24,29 @@ Verified in an Ubuntu 24.04 arm64 VM with GNOME 46 (Wayland and X11) and Plasma 
 | App in front | `_NET_ACTIVE_WINDOW` | AT-SPI when the app exposes it (`linux::atspi`; X11 apps use XWayland) | AT-SPI when available; Kate did not expose context in the test VM |
 | Paste | XTEST `Ctrl+V` | RemoteDesktop portal, asks once | same |
 
+### Hyprland (Omarchy)
+
+Hyprland has no RemoteDesktop portal and its GlobalShortcuts portal leaves binding the keys to
+the user's config, so the GNOME/KDE paths above don't fit. Instead `linux::hyprland` talks to
+Hyprland's socket (`$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket.sock`), which
+answers any client. Tested on Omarchy with Hyprland 0.56 (Lua config), two displays at scale 1.
+
+| | Hyprland |
+|---|---|
+| Shortcuts | `hl.bind` through `hyprctl eval`, running `scrawl shortcut record\|paste` (`linux::ipc`). Binds made over the socket go when the config reloads, so the event socket (`.socket2.sock`) is watched and `configreloaded` binds them again. The combos Scrawl bound live in the Lua global `scrawl_binds`, so a rebind removes exactly those |
+| Recording | The ScreenCast portal, with a restore token per display (`screencast@x,y,wxh` in `portal.json`), because Hyprland's portal shares one display per session: the first recording on each display asks which to share. A window or area is that display cropped to its rect. Omarchy's picker hides the "remember" checkbox and uses `screencopy:allow_token_by_default` |
+| Pointer, app in front, window list | `cursorpos`, `activewindow`, `clients` (any app, native Wayland too). Window ids are `Client::id` (top bit set, never an X id), so `linux::window_info` and `linux::activate` route them back to Hyprland |
+| Work area | Each output's `reserved` space (Omarchy's bar), since XWayland has no `_NET_WORKAREA` |
+| Paste | Hyprland types it: `send_key_state` down then up, `CTRL SHIFT` for windows Omarchy tags `terminal`, as Omarchy's universal paste does |
+| Clicks, keys, ⇧ ink | The input devices, as on any Wayland session (`input` group) |
+
+**Two coordinate spaces.** Hyprland's layout and XWayland's root window place outputs
+differently: with a 2560×1080 display at layout (0, 180) and a 2560×1440 one at (2560, 0),
+XWayland's RandR puts the 1440 one at (0, 0) and the 1080 one at (2560, 0), and an X window at
+root (2560, 0) shows at layout (0, 180). The rest of `linux` speaks root pixels, so every point
+and rect Hyprland reports goes through `hyprland::to_root` (matched by output name). Scaled
+outputs are untested.
+
 ### Clicks and ink on Wayland
 
 Wayland tells no app where the pointer is over another app's window. Scrawl reads buttons and keys from the input devices. In onboarding or Settings › Permissions, **Copy command** copies `sudo usermod -aG input "$USER"`. Run it in a terminal, then log out and back in. Scrawl checks whether it can open actual keyboard/mouse devices, rather than trusting group membership; it retries devices when access changes. This is the **Input devices** row (the Accessibility row on macOS).
@@ -70,6 +93,12 @@ Both Linux workflows run `scripts/linux/check-cpu-tiers.py` before stripping sym
 Linux previews are published manually from the checked AppImage artifacts as `linux-preview-N`, with `--prerelease --latest=false` and a combined `SHA256SUMS`. These tags do not trigger the `v*` release jobs, and neither the site nor the Sparkle appcast selects them.
 
 ## Building and testing
+
+On Arch or Omarchy, `./scripts/linux/install-local.sh` builds a release binary and installs it
+for the user (`~/.local/lib/scrawl`, `~/.local/bin/scrawl`, the launcher entry), using the
+distribution's GStreamer; then it restarts the tray app. `cargo test` expects no Wayland session
+(`env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 cargo test`): one Settings test counts the Input
+devices row, which only a Wayland session shows.
 
 Build dependencies (Ubuntu/Debian; CI installs the same):
 

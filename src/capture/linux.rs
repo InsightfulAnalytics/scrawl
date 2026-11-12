@@ -323,7 +323,7 @@ pub fn ensure_external_app_active() {
     if target == 0 {
         return;
     }
-    x11::activate(target);
+    linux::activate(target);
     let deadline = Instant::now() + Duration::from_millis(220);
     while Instant::now() < deadline {
         if linux::foreground_window().is_some_and(|w| w.hwnd == target) {
@@ -350,6 +350,7 @@ fn external_front_window() -> Option<linux::WindowInfo> {
 /// The frontmost app's pid, or the last external one while Scrawl itself is in front.
 pub fn frontmost_external_pid() -> Option<i32> {
     if linux::wayland_session()
+        && !linux::hyprland::active()
         && let Some(app) = linux::atspi::last_external_app()
     {
         return app.pid.map(|pid| pid as i32);
@@ -361,6 +362,7 @@ pub fn frontmost_external_pid() -> Option<i32> {
 /// X server sees only X11 apps, so the accessibility bus is asked first (`linux::atspi`).
 pub fn frontmost_app_info() -> Option<(i32, String, Option<String>)> {
     if linux::wayland_session()
+        && !linux::hyprland::active()
         && let Some(app) = linux::atspi::last_external_app()
     {
         return Some((app.pid.unwrap_or(0) as i32, app.name, Some(app.id)));
@@ -452,7 +454,7 @@ pub fn discover_target_at(window_query: Option<&str>, point: Option<[f64; 2]>) -
     let (rect, scale) = monitors
         .get(index)
         .map_or(([0.0, 0.0, 1920.0, 1080.0], 1.0), |m| (m.rect, m.scale));
-    let title = if linux::wayland_session() {
+    let title = if linux::wayland_session() && !linux::hyprland::active() {
         linux::atspi::last_external_app().and_then(|app| app.title)
     } else {
         front.map(|w| w.title)
@@ -528,6 +530,12 @@ fn keycode(keysym: u32) -> Option<u8> {
 /// through XTEST. A Ctrl the user still holds is left alone.
 pub fn post_synthetic_cmd_v() {
     let shift = super::is_frontmost_terminal();
+    if linux::hyprland::active() {
+        if let Err(error) = linux::hyprland::send_paste(shift) {
+            scrawl_log(format!("paste: Hyprland refused: {error:#}"));
+        }
+        return;
+    }
     if linux::wayland_session() {
         if let Err(error) = linux::portal::send_paste(shift) {
             scrawl_log(format!(
@@ -595,6 +603,8 @@ enum Backend {
     Gnome,
     /// Plasma 5's native KGlobalAccel service.
     Kde,
+    /// Hyprland binds (made over its socket) running `scrawl shortcut …` (`linux::ipc`).
+    Hyprland,
     /// Polled from the input devices: the press also reaches the app in front.
     Devices,
 }
@@ -795,6 +805,18 @@ fn bind_gnome(record: &ShortcutConfig, paste: &ShortcutConfig, paused: bool) -> 
     linux::portal::bind_gnome_keybindings(&[("record", binding(record)), ("paste", binding(paste))])
 }
 
+/// Hyprland's binds for both shortcuts, or none while paused.
+fn bind_hyprland(record: &ShortcutConfig, paste: &ShortcutConfig, paused: bool) -> anyhow::Result<()> {
+    let combo = |cfg: &ShortcutConfig| {
+        if paused || cfg.is_unset() {
+            String::new()
+        } else {
+            linux::hyprland::key_combo(cfg.carbon_modifiers, &shortcut_key(cfg))
+        }
+    };
+    linux::hyprland::bind(&[("record", combo(record)), ("paste", combo(paste))])
+}
+
 /// Sets up the shortcuts for this session on a thread of its own (the portal may show a
 /// dialog), and listens for `scrawl shortcut …` from GNOME's keybindings.
 pub fn install_global_hotkeys(telemetry: &Arc<SharedCaptureTelemetry>) {
@@ -823,6 +845,14 @@ pub fn install_global_hotkeys(telemetry: &Arc<SharedCaptureTelemetry>) {
                 set_backend(Backend::X11);
                 run_grab_events(telemetry);
                 return;
+            }
+            // Hyprland's GlobalShortcuts portal registers a shortcut but leaves binding it to
+            // the user's config, so Scrawl binds its keys itself over Hyprland's socket.
+            if linux::hyprland::active() {
+                match bind_hyprland(&record, &paste, false) {
+                    Ok(()) => return set_backend(Backend::Hyprland),
+                    Err(error) => scrawl_log(format!("Hyprland binds: {error:#}")),
+                }
             }
             // Plasma 5's portal opens System Settings but never binds the requested keys.
             // KGlobalAccel consumes the chord; Plasma 6 uses the portal normally.
@@ -896,6 +926,13 @@ pub fn set_shortcuts(
                     scrawl_log(format!("GNOME keybindings: {error:#}"));
                 }
             }
+            Backend::Hyprland => {
+                if let Err(error) = bind_hyprland(&record, &paste, false) {
+                    scrawl_log(format!("Hyprland binds: {error:#}"));
+                    let _ = bind_hyprland(&old_record, &old_paste, false);
+                    return Err(ShortcutKind::Record);
+                }
+            }
             Backend::Portal => scrawl_log(
                 "shortcuts: the desktop owns the portal's binding; change it in its settings",
             ),
@@ -941,6 +978,9 @@ pub fn pause_shortcuts(telemetry: &SharedCaptureTelemetry, paused: bool) {
         }
         Backend::Kde => {
             let _ = linux::shortcuts::bind(&record, &paste, paused);
+        }
+        Backend::Hyprland => {
+            let _ = bind_hyprland(&record, &paste, paused);
         }
         Backend::Portal | Backend::Devices | Backend::None => {}
     }

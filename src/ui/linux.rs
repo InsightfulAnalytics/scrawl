@@ -408,7 +408,7 @@ pub(super) fn pointer_on_hud_pill() -> bool {
 /// The largest of Scrawl's windows (for `scrawl preview --capture-screenshot`).
 pub(super) fn front_own_window() -> Option<isize> {
     let pid = std::process::id();
-    linux::top_level_windows()
+    x11::top_level_windows()
         .into_iter()
         .filter(|w| w.pid == pid && w.rect[2] >= 600.0 && w.rect[3] >= 400.0)
         .max_by_key(|w| (w.rect[2] * w.rect[3]) as i64)

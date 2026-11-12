@@ -24,7 +24,8 @@ protected your PC": click **More info**, then **Run anyway**. It doesn't update 
 
 On Linux (preview), download `Scrawl-<version>-linux-x86_64.AppImage` (or `aarch64` for ARM64)
 from the [GitHub release](https://github.com/kitlangton/scrawl/releases/latest). Ubuntu 24.04+
-is the build baseline; X11 and GNOME/KDE Wayland are supported.
+is the build baseline; X11, GNOME/KDE Wayland and Hyprland (Omarchy) are supported. On Arch or
+Omarchy, `./scripts/linux/install-local.sh` builds and installs it without the AppImage.
 
 ```sh
 chmod +x Scrawl-*-linux-*.AppImage
@@ -910,7 +911,7 @@ cargo build --release
 
 ## Linux
 
-Scrawl runs on Linux desktops (GNOME and KDE Plasma, on Wayland or X11) as the same app, from
+Scrawl runs on Linux desktops (GNOME, KDE Plasma and Hyprland, on Wayland or X11) as the same app, from
 the same GPUI code. It ships as an AppImage (`scripts/linux/appimage.sh`; every pull request's CI
 run has one) with GStreamer inside, so movies record without extra packages. On Wayland its
 windows run through XWayland.
@@ -929,7 +930,13 @@ windows run through XWayland.
   login (Settings › Permissions shows it). Click positions are exact over X11 apps and with
   tablets, touchscreens and VMs; with a mouse over a Wayland app they can be stale. Scrawl's pill
   and ink show in the recording (no Linux desktop lets an app leave its windows out).
-- **Window picker:** lists X11/XWayland windows. Use Screen or Area for native Wayland apps.
+- **Hyprland (Omarchy):** Scrawl asks Hyprland's socket for what other Wayland desktops keep
+  to themselves: it binds `Alt+Shift+S`/`Alt+Shift+V` itself (again after a config reload),
+  reads the pointer and the focused window over any app, lists every window for the picker,
+  and pastes through Hyprland. The portal asks which display to share once per display.
+  Clicks and Shift ink still need the `input` group.
+- **Window picker:** lists X11/XWayland windows (every window on Hyprland). Use Screen or Area
+  for native Wayland apps elsewhere.
   On KDE Wayland, desktop ink hides when Shift is released so clicks reach the app; the bundle keeps it.
 - **Not on Linux:** the cabled iPhone, video export, `agentContext` and Sparkle updates.
 

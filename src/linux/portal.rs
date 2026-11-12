@@ -53,6 +53,11 @@ pub fn source_for(target: &TargetInfo, stopping: &AtomicBool) -> Result<Source> 
             _ => Source::X11 { rect },
         });
     }
+    // Hyprland lists every window (`linux::hyprland`), native ones too, so a window is
+    // recorded as its rect on the display the portal shares, which is remembered per display.
+    if super::hyprland::active() {
+        return hyprland_source(target, rect, stopping);
+    }
     // An X11 app's window on XWayland can be read like on X11.
     if target.mode == CaptureMode::Window
         && let Some(xid) = target.window_id
@@ -80,6 +85,58 @@ pub fn source_for(target: &TargetInfo, stopping: &AtomicBool) -> Result<Source> 
             rect[2].min(sw) as u32,
             rect[3].min(sh) as u32,
         ]),
+        _ => None,
+    };
+    Ok(Source::PipeWire { session, crop })
+}
+
+/// Hyprland: the display under `rect`'s centre through the ScreenCast portal, cropped to `rect`
+/// for an area or a window. Hyprland's portal shares one display per session and restores the
+/// one a token names, so each display keeps its own token: the first recording on a display
+/// asks which to share, later ones start without asking.
+fn hyprland_source(target: &TargetInfo, rect: [f64; 4], stopping: &AtomicBool) -> Result<Source> {
+    let monitor = super::monitor_at(rect[0] + rect[2] / 2.0, rect[1] + rect[3] / 2.0);
+    let key = monitor.as_ref().map_or_else(
+        || "screencast".to_owned(),
+        |m| {
+            let [x, y, w, h] = m.rect.map(|v| v.round() as i64);
+            format!("screencast@{x},{y},{w}x{h}")
+        },
+    );
+    let mut session = portal_screencast_keyed(false, &key, stopping)?;
+    // The shared display, when the portal doesn't say where it is: the display Scrawl asked for
+    // if the sizes agree, else the display that size matches.
+    if let Some([_, _, sw, sh]) = session.rect.filter(|r| r[0] == 0.0 && r[1] == 0.0) {
+        let same = |m: &super::Monitor| (m.rect[2] - sw).abs() < 1.0 && (m.rect[3] - sh).abs() < 1.0;
+        let shared = monitor
+            .clone()
+            .filter(|m| same(m))
+            .or_else(|| super::monitors().into_iter().find(|m| same(m)));
+        if let Some(m) = shared {
+            session.rect = Some(m.rect);
+        }
+    }
+    if let (Some(shared), Some(asked)) = (session.rect, monitor.as_ref())
+        && ((shared[0] - asked.rect[0]).abs() >= 1.0 || (shared[1] - asked.rect[1]).abs() >= 1.0)
+    {
+        // The person shared another display than the one under the pointer: the token just
+        // saved restores that display, so it's kept under that display's key.
+        scrawl_log(format!("portal: shared {shared:?}, not the display at {:?}", asked.rect));
+        let [x, y, w, h] = shared.map(|v| v.round() as i64);
+        save_token(&format!("screencast@{x},{y},{w}x{h}"), saved_token(&key).as_deref());
+        save_token(&key, None);
+    }
+    let crop = match (target.mode, session.rect) {
+        (CaptureMode::Region | CaptureMode::Window, Some([sx, sy, sw, sh]))
+            if sw > 0.0 && sh > 0.0 =>
+        {
+            let x = (rect[0] - sx).clamp(0.0, sw);
+            let y = (rect[1] - sy).clamp(0.0, sh);
+            let w = rect[2].min(sw - x).max(1.0);
+            let h = rect[3].min(sh - y).max(1.0);
+            // H.264 wants even sizes.
+            Some([x as u32, y as u32, (w as u32) & !1, (h as u32) & !1])
+        }
         _ => None,
     };
     Ok(Source::PipeWire { session, crop })
@@ -191,14 +248,21 @@ fn save_token(key: &str, token: Option<&str>) {
 /// desktop asks which; the answer is remembered (a restore token), so later recordings start
 /// without asking.
 fn portal_screencast(window: bool, stopping: &AtomicBool) -> Result<Stream> {
-    use ashpd::desktop::PersistMode;
-    use ashpd::desktop::screencast::{CursorMode, Screencast, SourceType};
-
     let key = if window {
         "screencast-window"
     } else {
         "screencast"
     };
+    portal_screencast_keyed(window, key, stopping)
+}
+
+/// `portal_screencast`, with its restore token saved under `key` in `portal.json`.
+fn portal_screencast_keyed(window: bool, key: &str, stopping: &AtomicBool) -> Result<Stream> {
+    use ashpd::desktop::PersistMode;
+    use ashpd::desktop::screencast::{CursorMode, Screencast, SourceType};
+
+    let key = key.to_owned();
+    let thread_key = key.clone();
     let (ready_tx, ready_rx) = flume::bounded::<Result<(u32, OwnedFd, Option<[f64; 4]>)>>(1);
     let (stop_tx, stop_rx) = flume::bounded::<()>(1);
     std::thread::Builder::new()
@@ -209,7 +273,7 @@ fn portal_screencast(window: bool, stopping: &AtomicBool) -> Result<Stream> {
                     let proxy = Screencast::new().await?;
                     let session = proxy.create_session().await?;
                     let request = async {
-                        let token = saved_token(key);
+                        let token = saved_token(&thread_key);
                         let kind = if window {
                             SourceType::Window
                         } else {
@@ -232,7 +296,7 @@ fn portal_screencast(window: bool, stopping: &AtomicBool) -> Result<Stream> {
                             .await?;
                         let streams = proxy.start(&session, None).await?.response()?;
                         if !window {
-                            save_token(key, streams.restore_token());
+                            save_token(&thread_key, streams.restore_token());
                         }
                         let stream = streams.streams().first().context("Nothing was shared")?;
                         let rect = match (stream.position(), stream.size()) {
@@ -279,7 +343,7 @@ fn portal_screencast(window: bool, stopping: &AtomicBool) -> Result<Stream> {
         match ready_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Ok(stream)) => break stream,
             Ok(Err(error)) => {
-                save_token(key, None);
+                save_token(&key, None);
                 return Err(error);
             }
             Err(flume::RecvTimeoutError::Timeout) => {}

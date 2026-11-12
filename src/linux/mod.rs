@@ -14,6 +14,7 @@
 
 pub mod atspi;
 pub mod clipboard;
+pub mod hyprland;
 pub mod input;
 pub mod ipc;
 pub mod login;
@@ -29,10 +30,66 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-pub use x11::{
-    Monitor, WindowInfo, active_window as foreground_window, monitor_at, monitors,
-    primary_monitor, top_level_windows, window_info,
-};
+pub use x11::{Monitor, WindowInfo, monitor_at, monitors, primary_monitor};
+
+/// A Hyprland window as the rest of `linux` sees windows. Its id is `Client::id`, not an X id:
+/// Hyprland lists native Wayland windows too, which XWayland can't see.
+fn hyprland_window(client: &hyprland::Client) -> WindowInfo {
+    WindowInfo {
+        hwnd: client.id(),
+        pid: client.pid(),
+        title: client.title.clone(),
+        class: client.class.clone(),
+        rect: client.rect(),
+        kind: x11::WindowKind::Normal,
+        hidden: false,
+        above: client.floating,
+        skip_taskbar: false,
+    }
+}
+
+/// Whether a window id is a Hyprland window's (`hyprland::Client::id`), not an X id.
+pub fn is_hyprland_id(id: isize) -> bool {
+    hyprland::active() && id >= 0x4000_0000
+}
+
+/// The focused window: Hyprland's (any app), else the X server's (X11 apps only on Wayland).
+pub fn foreground_window() -> Option<WindowInfo> {
+    if hyprland::active() {
+        return hyprland::active_window().map(|c| hyprland_window(&c));
+    }
+    x11::active_window()
+}
+
+/// Top-level windows, front to back: on Hyprland every window on a showing workspace, else the
+/// X window manager's list.
+pub fn top_level_windows() -> Vec<WindowInfo> {
+    if hyprland::active() {
+        return hyprland::visible_clients()
+            .iter()
+            .map(hyprland_window)
+            .collect();
+    }
+    x11::top_level_windows()
+}
+
+pub fn window_info(id: isize) -> Option<WindowInfo> {
+    if is_hyprland_id(id) {
+        return hyprland::window_for_id(id).map(|c| hyprland_window(&c));
+    }
+    x11::window_info(id)
+}
+
+/// Brings a window to the front (for a paste into the app that was there).
+pub fn activate(id: isize) {
+    if is_hyprland_id(id) {
+        if let Some(client) = hyprland::window_for_id(id) {
+            hyprland::focus(&client.address);
+        }
+        return;
+    }
+    x11::activate(id);
+}
 
 static WAYLAND_DISPLAY: OnceLock<Option<OsString>> = OnceLock::new();
 
@@ -72,6 +129,12 @@ pub fn wayland_session() -> bool {
 /// so an absolute pointing device's position comes first when one moved it last
 /// (`input::absolute_pointer`).
 pub fn cursor_position() -> Option<(f64, f64)> {
+    // Hyprland knows where the pointer is over every window.
+    if hyprland::active()
+        && let Some(position) = hyprland::cursor_position()
+    {
+        return Some(position);
+    }
     if wayland_session()
         && let Some([nx, ny]) = input::absolute_pointer()
         && let Some([x, y, w, h]) = desktop_rect()
