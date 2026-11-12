@@ -76,6 +76,13 @@ Neither X11 nor GNOME's or KDE's screencasts let an app leave its windows out, s
 - **Launch at login:** `~/.config/autostart/scrawl.desktop`. **Trash:** the freedesktop trash. **Captures:** `~/.local/share/scrawl/captures`; **log:** `~/.local/share/scrawl/Logs/scrawl.log`.
 - **Command-line tool:** Settings › Agents links `~/.local/bin/scrawl` to the AppImage (`$APPIMAGE`).
 
+## Off the network (this fork)
+
+The ingest server (`phone::serve_http`, port 47777) listens on `127.0.0.1` only, not every
+interface as upstream does. Local `/sdk.js` registrations and `scrawl serve` clients on the same
+machine still work; ScrawlKit uploads from a phone over Wi-Fi or Tailscale do not, and a
+`scrawl link` setup link that names a LAN or Tailscale address points at nothing.
+
 ## Not on Linux
 
 The cabled iPhone, video export, `agentContext` lookups (`ax_other.rs`), Sparkle updates (**Check for Updates…** opens the releases page) and the dev-site tab URL (`/sdk.js` registrations still route).
