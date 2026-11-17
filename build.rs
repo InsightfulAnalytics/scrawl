@@ -33,14 +33,24 @@ fn main() {
     }
 }
 
+/// The profile directory (`target/debug`), where cargo puts `scrawl` itself. Found from
+/// `OUT_DIR` as the parent of its nearest `build` folder, because the depth changed: cargo up to
+/// 1.99 uses `<profile>/build/scrawl-<hash>/out`, cargo 1.100 `<profile>/build/scrawl/<hash>/out`.
+fn profile_dir() -> PathBuf {
+    let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+    out_dir
+        .ancestors()
+        .skip(1)
+        .find(|dir| dir.file_name().is_some_and(|name| name == "build"))
+        .and_then(|build| build.parent())
+        .expect("Unexpected OUT_DIR layout")
+        .to_path_buf()
+}
+
 /// Keep runtime libraries AND dlopen-only CPU modules together: transcribe.cpp's
 /// init_backends_default uses dladdr to search next to the loaded libtranscribe.
 fn stage_transcribe_shared_objects() {
-    let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
-    let profile = out_dir
-        .ancestors()
-        .nth(3)
-        .expect("Unexpected OUT_DIR layout");
+    let profile = profile_dir();
     for key in [
         "DEP_TRANSCRIBE_CPP_RUNTIME_DIR",
         "DEP_TRANSCRIBE_CPP_MODULE_DIR",
@@ -74,11 +84,7 @@ fn stage_transcribe_dlls() {
     let Some(runtime) = std::env::var_os("DEP_TRANSCRIBE_CPP_RUNTIME_DIR") else {
         return;
     };
-    let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
-    // OUT_DIR is <target>/<profile>/build/scrawl-<hash>/out.
-    let Some(profile) = out_dir.ancestors().nth(3) else {
-        return;
-    };
+    let profile = profile_dir();
     let dlls: Vec<PathBuf> = std::fs::read_dir(&runtime)
         .into_iter()
         .flatten()
@@ -214,12 +220,8 @@ fn compile_helper() {
     }
     let plist = helper_dir.join("Info.plist");
     println!("cargo:rerun-if-changed={}", plist.display());
-    // OUT_DIR is target/<profile>/build/scrawl-<hash>/out.
     let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
-    let profile_dir = out_dir
-        .ancestors()
-        .nth(3)
-        .expect("Unexpected OUT_DIR layout");
+    let profile = profile_dir();
     let arch = match std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
         Ok("aarch64") => "arm64",
         Ok(other) => other,
@@ -249,7 +251,7 @@ fn compile_helper() {
         status.success(),
         "scrawl-helper failed to compile (needs the macOS 26 SDK; the result runs on macOS 15)"
     );
-    let dest = profile_dir.join("scrawl-helper");
+    let dest = profile.join("scrawl-helper");
     let _ = std::fs::remove_file(&dest);
     std::fs::copy(&built, dest).expect("Could not place scrawl-helper");
 }
