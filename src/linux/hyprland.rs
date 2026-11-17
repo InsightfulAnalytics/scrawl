@@ -428,10 +428,114 @@ fn follow_events() -> Result<()> {
     Ok(())
 }
 
+// MARK: The share dialog
+
+/// Counts ScreenCast requests, so a closer left over from an earlier one stops looking.
+static SHARE_REQUESTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// A ScreenCast request is starting: any dialog from here on is its own.
+pub fn share_request_started() {
+    SHARE_REQUESTS.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+}
+
+/// Closes the share dialog a cancelled ScreenCast request left open. Hyprland's portal runs its
+/// picker as a child process and waits for the answer; closing the session doesn't end the
+/// picker, so the dialog would stay over every workspace of its display with nothing listening.
+/// The portal handles one request at a time, so while Scrawl's is pending the picker is
+/// Scrawl's. When the two presses come close together the picker opens after the cancel, so
+/// this looks for it for two seconds, or until the next request starts.
+pub fn close_share_dialog() {
+    use std::sync::atomic::Ordering;
+    let request = SHARE_REQUESTS.load(Ordering::Acquire);
+    let _ = std::thread::Builder::new()
+        .name("scrawl-hyprland-share-dialog".into())
+        .spawn(move || {
+            for _ in 0..20 {
+                if SHARE_REQUESTS.load(Ordering::Acquire) != request {
+                    return;
+                }
+                let pickers = portal_children();
+                if !pickers.is_empty() {
+                    for pid in &pickers {
+                        unsafe { libc::kill(*pid, libc::SIGTERM) };
+                    }
+                    scrawl_log(format!("hyprland: closed the share dialog {pickers:?}"));
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+}
+
+/// The processes this user's `xdg-desktop-portal-hyprland` started (its picker, and the shell
+/// it may run it through).
+fn portal_children() -> Vec<i32> {
+    use std::os::unix::fs::MetadataExt as _;
+    let uid = unsafe { libc::getuid() };
+    let mut table = Vec::new();
+    let mut portals = Vec::new();
+    for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
+        let Some(pid) = entry.file_name().to_str().and_then(|n| n.parse::<i32>().ok()) else {
+            continue;
+        };
+        let path = entry.path();
+        if path.metadata().map(|m| m.uid()).ok() != Some(uid) {
+            continue;
+        }
+        let Some(parent) = std::fs::read_to_string(path.join("stat"))
+            .ok()
+            .and_then(|stat| parent_pid(&stat))
+        else {
+            continue;
+        };
+        table.push((pid, parent));
+        let command = std::fs::read(path.join("cmdline")).unwrap_or_default();
+        let program = command.split(|b| *b == 0).next().unwrap_or_default();
+        if program.ends_with(b"xdg-desktop-portal-hyprland") {
+            portals.push(pid);
+        }
+    }
+    descendants(&table, &portals)
+}
+
+/// The parent pid in a `/proc/<pid>/stat` line. The command name sits in brackets and can hold
+/// spaces and brackets itself, so the fields are counted from the last `)`.
+fn parent_pid(stat: &str) -> Option<i32> {
+    let rest = &stat[stat.rfind(')')? + 1..];
+    rest.split_whitespace().nth(1)?.parse().ok()
+}
+
+/// Every process below `roots` in a (pid, parent) table, `roots` themselves left out.
+fn descendants(table: &[(i32, i32)], roots: &[i32]) -> Vec<i32> {
+    let mut found: Vec<i32> = Vec::new();
+    let mut parents: Vec<i32> = roots.to_vec();
+    while let Some(parent) = parents.pop() {
+        for &(pid, of) in table {
+            if of == parent && !roots.contains(&pid) && !found.contains(&pid) {
+                found.push(pid);
+                parents.push(pid);
+            }
+        }
+    }
+    found.sort_unstable();
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::capture::{CARBON_CMD_KEY, CARBON_OPTION_KEY, CARBON_SHIFT_KEY};
+
+    #[test]
+    fn the_share_dialog_is_found_below_the_portal_only() {
+        assert_eq!(parent_pid("42 (sh) S 7 42 42 0 -1"), Some(7));
+        assert_eq!(parent_pid("42 (a b) c) R 9 1 1"), Some(9));
+        assert_eq!(parent_pid("no brackets"), None);
+        // 10 is the portal; 20 its shell, 30 the picker; 40 belongs to something else.
+        let table = [(10, 1), (20, 10), (30, 20), (40, 1), (50, 40)];
+        assert_eq!(descendants(&table, &[10]), vec![20, 30]);
+        assert!(descendants(&table, &[]).is_empty());
+    }
 
     #[test]
     fn shortcuts_are_written_the_way_hyprland_reads_them() {

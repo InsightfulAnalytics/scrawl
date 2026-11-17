@@ -270,6 +270,9 @@ fn portal_screencast_keyed(window: bool, key: &str, stopping: &AtomicBool) -> Re
 
     let key = key.to_owned();
     let thread_key = key.clone();
+    if super::hyprland::active() {
+        super::hyprland::share_request_started();
+    }
     let (ready_tx, ready_rx) = flume::bounded::<Result<(u32, OwnedFd, Option<[f64; 4]>)>>(1);
     let (stop_tx, stop_rx) = flume::bounded::<()>(1);
     std::thread::Builder::new()
@@ -345,6 +348,10 @@ fn portal_screencast_keyed(window: bool, key: &str, stopping: &AtomicBool) -> Re
     let (node, fd, rect) = loop {
         if stopping.load(Ordering::Acquire) || std::time::Instant::now() >= deadline {
             let _ = stop_tx.try_send(());
+            // Hyprland's portal leaves its dialog up when the session closes.
+            if super::hyprland::active() {
+                super::hyprland::close_share_dialog();
+            }
             bail!("Screen sharing was cancelled or the dialog wasn't answered");
         }
         match ready_rx.recv_timeout(Duration::from_millis(100)) {
