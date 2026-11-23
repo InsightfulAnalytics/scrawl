@@ -578,6 +578,10 @@ pub(crate) struct Sampler {
     pub urgent: Arc<AtomicBool>,
     pub frames: Arc<Mutex<CandidateBuffer>>,
     pub video_offset_ms: Arc<AtomicU64>,
+    /// Set when the screen source could not start, so the recording ends instead of running on
+    /// with nothing being recorded (`ScreenCaptureSession::start_error`).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub start_error: Arc<Mutex<Option<String>>>,
 }
 
 /// Active screen + optional MP4 recorder (ScreenCaptureKit on macOS, Windows.Graphics.Capture
@@ -589,6 +593,7 @@ pub struct ScreenCaptureSession {
     frames: Arc<Mutex<CandidateBuffer>>,
     video_offset_ms: Arc<AtomicU64>,
     sampler_thread: Option<JoinHandle<Option<PathBuf>>>,
+    start_error: Arc<Mutex<Option<String>>>,
     _recording: crate::retention::Recording,
 }
 
@@ -608,6 +613,8 @@ impl ScreenCaptureSession {
         let thread_urgent = Arc::clone(&urgent_snapshot);
         let thread_frames = Arc::clone(&frames);
         let thread_offset = Arc::clone(&video_offset_ms);
+        let start_error = Arc::new(Mutex::new(None));
+        let thread_start_error = Arc::clone(&start_error);
         let sampler_target = target;
         let sampler_thread = thread::Builder::new()
             .name("scrawl-frame-sampler".into())
@@ -621,6 +628,7 @@ impl ScreenCaptureSession {
                     urgent: thread_urgent,
                     frames: thread_frames,
                     video_offset_ms: thread_offset,
+                    start_error: thread_start_error,
                 })
             })
             .ok();
@@ -632,8 +640,18 @@ impl ScreenCaptureSession {
             frames,
             video_offset_ms,
             sampler_thread,
+            start_error,
             _recording: crate::retention::Recording::start(),
         }
+    }
+
+    /// Why the screen source could not start, once it has failed (Linux: a portal dialog
+    /// cancelled or failed). The recording should end then: nothing is being recorded.
+    pub fn start_error(&self) -> Option<String> {
+        self.start_error
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     pub fn request_immediate_frame(&self) {
@@ -1558,6 +1576,7 @@ mod tests {
             frames,
             video_offset_ms: Arc::new(AtomicU64::new(120)),
             sampler_thread: Some(worker),
+            start_error: Arc::new(Mutex::new(None)),
             _recording: crate::retention::Recording::start(),
         };
         let recording = session.stop();

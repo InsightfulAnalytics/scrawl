@@ -1024,6 +1024,7 @@ pub(super) fn run_sampler(sampler: Sampler) -> Option<PathBuf> {
         urgent: thread_urgent,
         frames: thread_frames,
         video_offset_ms: thread_offset,
+        ..
     } = sampler;
     let initial_excluded = excluded_window_ids
         .lock()

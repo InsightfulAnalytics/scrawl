@@ -635,6 +635,14 @@ impl IslandPhase {
     }
 }
 
+/// A capture that failed to build leaves its folder behind; an empty one is only clutter
+/// (`latest` and retention skip it). One holding anything is kept for `scrawl recover`.
+fn remove_failed_bundle(dir: &std::path::Path) {
+    if std::fs::remove_dir(dir).is_ok() {
+        scrawl_log(format!("removed the empty folder of a failed capture: {}", dir.display()));
+    }
+}
+
 enum CaptureSource {
     Screen {
         session: ScreenCaptureSession,
@@ -2765,6 +2773,22 @@ impl ScrawlCoordinator {
         }
     }
 
+    /// Why the active recording's screen source could not start, once it has failed.
+    fn screen_start_error(&self) -> Option<String> {
+        match &self.active_recording.as_ref()?.source {
+            CaptureSource::Screen { session, .. } => session.start_error(),
+            _ => None,
+        }
+    }
+
+    /// The screen source failed (Linux: the sharing dialog was cancelled or failed): nothing is
+    /// being recorded, so the recording ends, its empty bundle goes, and the person is told.
+    fn screen_failed_to_start(&mut self, error: &str, cx: &mut Context<Self>) {
+        scrawl_log(format!("Capture failed: {error}"));
+        platform::notify_capture_failed(error);
+        self.cancel_recording(cx);
+    }
+
     pub fn cancel_recording(&mut self, cx: &mut Context<Self>) {
         self.playback.take();
         scrawl_log("cancel_recording invoked");
@@ -2836,6 +2860,7 @@ impl ScrawlCoordinator {
             })
         });
 
+        let failed_dir = bundle_dir.clone();
         cx.spawn(async move |entity, cx| {
             let result = cx
                 .background_executor()
@@ -2912,6 +2937,7 @@ impl ScrawlCoordinator {
                         Err(error) => {
                             scrawl_log(format!("Capture failed: {error:#}"));
                             platform::notify_capture_failed(&error.to_string());
+                            remove_failed_bundle(&failed_dir);
                             coord.set_island_phase(IslandPhase::Dismissing);
                             cx.notify();
                             return None;
@@ -5550,6 +5576,9 @@ pub fn run_app(
                     }
 
                     motion::poll_tune();
+                    if let Some(error) = loop_coord.read(cx).screen_start_error() {
+                        loop_coord.update(cx, |coord, cx| coord.screen_failed_to_start(&error, cx));
+                    }
                     if loop_coord.read(cx).shortcut.is_pending() {
                         loop_coord.update(cx, |coord, cx| coord.tick_shortcut(cx));
                     } else if loop_coord.read(cx).telemetry.take_escape()

@@ -37,7 +37,7 @@ the `linux` facade (`foreground_window`, `top_level_windows`, `cursor_position`,
 | | Hyprland |
 |---|---|
 | Shortcuts | `hl.bind` through `hyprctl eval`, running `scrawl shortcut record\|paste` (`linux::ipc`). Binds made over the socket go when the config reloads, so the event socket (`.socket2.sock`) is watched and `configreloaded` binds them again. The combos Scrawl bound live in the Lua global `scrawl_binds`, so a rebind removes exactly those |
-| Recording | The ScreenCast portal, with a restore token per display (`screencast@x,y,wxh` in `portal.json`), because Hyprland's portal shares one display per session: the first recording on each display asks which to share. A window or area is that display cropped to its rect. Omarchy's picker hides the "remember" checkbox and uses `screencopy:allow_token_by_default`. The portal leaves its picker open when a session closes, so a recording finished (or timed out) while the dialog is still up ends the picker itself (`hyprland::close_share_dialog`: `SIGTERM` to the portal's child processes) |
+| Recording | The ScreenCast portal, with a restore token per display (`screencast@x,y,wxh` in `portal.json`), because Hyprland's portal shares one display per session: the first recording on each display asks which to share. A window or area is that display cropped to its rect. Omarchy's picker hides the "remember" checkbox and uses `screencopy:allow_token_by_default`. The portal leaves its picker open when a session closes, so a recording finished (or timed out) while the dialog is still up ends the picker itself (`hyprland::close_share_dialog`: `SIGTERM` to the portal's child processes). The picker runs inside `SelectSources`, so its answer is checked there: a dialog closed with nothing chosen ends the recording with a notification (and keeps the saved choice), rather than failing later as "Invalid session". Sharing another display than the one under the pointer also ends it: the choice is kept for that display |
 | Pointer, app in front, window list | `cursorpos`, `activewindow`, `clients` (any app, native Wayland too). App names come from Hyprland's window class (an Omarchy web app keeps its own name, not Chromium's). Window ids are `WindowId::Hyprland` (bit 30 set; X ids fit in 29 bits), so `linux::window_info` and `linux::activate` route them back to Hyprland |
 | Work area | Each output's `reserved` space (Omarchy's bar), since XWayland has no `_NET_WORKAREA` |
 | Clipboard | `wl-copy`, set on the Wayland side, since most apps there are native |
@@ -48,8 +48,9 @@ the `linux` facade (`foreground_window`, `top_level_windows`, `cursor_position`,
 differently: with a 2560×1080 display at layout (0, 180) and a 2560×1440 one at (2560, 0),
 XWayland's RandR puts the 1440 one at (0, 0) and the 1080 one at (2560, 0), and an X window at
 root (2560, 0) shows at layout (0, 180). The rest of `linux` speaks root pixels, so every point
-and rect Hyprland reports goes through `hyprland::to_root` (matched by output name). Scaled
-outputs are untested.
+and rect Hyprland reports goes through `hyprland::to_root` (matched by output name). A rotated
+output (odd `transform`) has its width and height swapped; on a scaled output the offset into it
+is multiplied by its RandR size over its layout size. Scaled outputs are still untested.
 
 ### Clicks and ink on Wayland
 
