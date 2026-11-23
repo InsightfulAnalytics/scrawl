@@ -18,12 +18,35 @@ appdir="$out/AppDir"
 mkdir -p "$tools"
 rm -rf "$appdir"
 
+# Pinned tools, each checked against its SHA-256 before it runs: what packs the release is
+# never whatever a moving tag or branch serves today. To update, change the tag or commit and
+# its hashes (GitHub shows a release asset's sha256 as its digest).
+linuxdeploy_tag="1-alpha-20251107-1"
+case "$arch" in
+  x86_64) linuxdeploy_sha256="c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d" ;;
+  aarch64) linuxdeploy_sha256="620095110d693282b8ebeb244a95b5e911cf8f65f76c88b4b47d16ae6346fcff" ;;
+  *) echo "No pinned linuxdeploy for $arch" >&2; exit 1 ;;
+esac
+gstreamer_plugin_commit="432af639725bc8b99df12351e86bb2e8a6b3585f"
+gstreamer_plugin_sha256="d1cf90701047aa9583c274bb66dd82db352255374fbfb8f3c4c89a05fe23bce0"
+
 fetch() {
-  [ -s "$tools/$2" ] || curl -fsSL -o "$tools/$2" "$1"
-  chmod +x "$tools/$2"
+  local url="$1" name="$2" sha256="$3"
+  if ! echo "$sha256  $tools/$name" | sha256sum --check --status 2>/dev/null; then
+    curl -fsSL -o "$tools/$name.part" "$url"
+    if ! echo "$sha256  $tools/$name.part" | sha256sum --check --status; then
+      echo "$name from $url does not match its pinned SHA-256" >&2
+      rm -f "$tools/$name.part"
+      exit 1
+    fi
+    mv "$tools/$name.part" "$tools/$name"
+  fi
+  chmod +x "$tools/$name"
 }
-fetch "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-$arch.AppImage" linuxdeploy
-fetch "https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gstreamer/master/linuxdeploy-plugin-gstreamer.sh" linuxdeploy-plugin-gstreamer.sh
+fetch "https://github.com/linuxdeploy/linuxdeploy/releases/download/$linuxdeploy_tag/linuxdeploy-$arch.AppImage" \
+  linuxdeploy "$linuxdeploy_sha256"
+fetch "https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gstreamer/$gstreamer_plugin_commit/linuxdeploy-plugin-gstreamer.sh" \
+  linuxdeploy-plugin-gstreamer.sh "$gstreamer_plugin_sha256"
 
 multiarch="$(gcc -print-multiarch 2>/dev/null || echo "$arch-linux-gnu")"
 export GSTREAMER_PLUGINS_DIR="/usr/lib/$multiarch/gstreamer-1.0"

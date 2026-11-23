@@ -353,6 +353,7 @@ pub fn run_sampler(sampler: Sampler) -> Option<PathBuf> {
         frames,
         video_offset_ms,
         excluded_window_ids,
+        start_error,
     } = sampler;
     let long_edge = if target.mode == CaptureMode::Display {
         2560.0
@@ -386,6 +387,14 @@ pub fn run_sampler(sampler: Sampler) -> Option<PathBuf> {
         }
         Err(error) => {
             scrawl_log(format!("Screen capture failed to start: {error:#}"));
+            // Unless the recording is already ending (its own stop cancels the dialog), the
+            // UI ends it and says why, rather than running on with nothing recorded.
+            if !stopping.load(Ordering::Acquire) {
+                *start_error
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    Some(format!("{error:#}"));
+            }
             None
         }
     };

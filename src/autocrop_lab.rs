@@ -255,6 +255,7 @@ pub fn serve(dir: &Path, bundle: &ScrawlBundle, port: u16, open: bool) -> Result
     let input = input_for_bundle(dir, bundle);
     let page = playground_page(dir, bundle, true)?;
     let root = dir.canonicalize()?;
+    let port = listener.local_addr()?.port();
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
         let _ = (|| -> Result<()> {
@@ -264,53 +265,62 @@ pub fn serve(dir: &Path, bundle: &ScrawlBundle, port: u16, open: bool) -> Result
             let mut parts = line.split_whitespace();
             let (method, path) = (parts.next().unwrap_or(""), parts.next().unwrap_or("/"));
             let mut length = 0;
+            let mut host = String::new();
             loop {
                 let mut header = String::new();
                 reader.read_line(&mut header)?;
                 if header.trim().is_empty() {
                     break;
                 }
-                if let Some((k, v)) = header.split_once(':')
-                    && k.eq_ignore_ascii_case("content-length")
-                {
-                    length = v.trim().parse().unwrap_or(0);
+                if let Some((k, v)) = header.split_once(':') {
+                    if k.eq_ignore_ascii_case("content-length") {
+                        length = v.trim().parse().unwrap_or(0);
+                    } else if k.eq_ignore_ascii_case("host") {
+                        host = v.trim().to_ascii_lowercase();
+                    }
                 }
             }
-            let (status, kind, body): (&str, &str, Vec<u8>) = match (method, path) {
-                ("POST", "/crop") => {
-                    let mut buf = vec![0; length];
-                    reader.read_exact(&mut buf)?;
-                    match serde_json::from_slice::<Settings>(&buf) {
-                        Ok(s) => (
-                            "200 OK",
-                            "application/json",
-                            serde_json::to_vec(&autocrop::compute(&input, &s))?,
-                        ),
-                        Err(e) => ("400 Bad Request", "text/plain", e.to_string().into_bytes()),
-                    }
-                }
-                ("GET", "/" | "/autocrop/" | "/autocrop/index.html") => (
-                    "200 OK",
-                    "text/html; charset=utf-8",
-                    page.clone().into_bytes(),
-                ),
-                ("GET", p) => {
-                    let rel = p.trim_start_matches('/').split('?').next().unwrap_or("");
-                    let rel = rel.replace("%20", " ");
-                    let file = root.join(&rel);
-                    match file.canonicalize() {
-                        Ok(f) if f.starts_with(&root) && f.is_file() => {
-                            let kind = if rel.ends_with(".png") {
-                                "image/png"
-                            } else {
-                                "application/octet-stream"
-                            };
-                            ("200 OK", kind, std::fs::read(f)?)
+            // Only pages on this machine's own name for the server: a website that rebinds its
+            // own domain to 127.0.0.1 still sends that domain as the Host, and gets nothing.
+            let (status, kind, body): (&str, &str, Vec<u8>) = if !local_host(&host, port) {
+                ("403 Forbidden", "text/plain", b"forbidden".to_vec())
+            } else {
+                match (method, path) {
+                    ("POST", "/crop") => {
+                        let mut buf = vec![0; length];
+                        reader.read_exact(&mut buf)?;
+                        match serde_json::from_slice::<Settings>(&buf) {
+                            Ok(s) => (
+                                "200 OK",
+                                "application/json",
+                                serde_json::to_vec(&autocrop::compute(&input, &s))?,
+                            ),
+                            Err(e) => ("400 Bad Request", "text/plain", e.to_string().into_bytes()),
                         }
-                        _ => ("404 Not Found", "text/plain", b"not found".to_vec()),
                     }
+                    ("GET", "/" | "/autocrop/" | "/autocrop/index.html") => (
+                        "200 OK",
+                        "text/html; charset=utf-8",
+                        page.clone().into_bytes(),
+                    ),
+                    ("GET", p) => {
+                        let rel = p.trim_start_matches('/').split('?').next().unwrap_or("");
+                        let rel = rel.replace("%20", " ");
+                        let file = root.join(&rel);
+                        match file.canonicalize() {
+                            Ok(f) if f.starts_with(&root) && f.is_file() => {
+                                let kind = if rel.ends_with(".png") {
+                                    "image/png"
+                                } else {
+                                    "application/octet-stream"
+                                };
+                                ("200 OK", kind, std::fs::read(f)?)
+                            }
+                            _ => ("404 Not Found", "text/plain", b"not found".to_vec()),
+                        }
+                    }
+                    _ => ("405 Method Not Allowed", "text/plain", Vec::new()),
                 }
-                _ => ("405 Method Not Allowed", "text/plain", Vec::new()),
             };
             write!(
                 stream,
@@ -322,6 +332,13 @@ pub fn serve(dir: &Path, bundle: &ScrawlBundle, port: u16, open: bool) -> Result
         })();
     }
     Ok(())
+}
+
+/// `host` (a request's Host header) names this machine's loopback server on `port`.
+fn local_host(host: &str, port: u16) -> bool {
+    ["127.0.0.1", "localhost", "[::1]"]
+        .iter()
+        .any(|name| host == format!("{name}:{port}"))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1228,6 +1245,15 @@ pub fn print_scores(label: &str, scores: &[CaseScore]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_playground_answers_only_its_own_host() {
+        assert!(local_host("127.0.0.1:4810", 4810));
+        assert!(local_host("localhost:4810", 4810));
+        assert!(!local_host("evil.example:4810", 4810));
+        assert!(!local_host("127.0.0.1:80", 4810));
+        assert!(!local_host("", 4810));
+    }
 
     /// The simulated corpus (`scripts/autocrop-corpus.mjs`, built with `scrawl fixture` and
     /// exported with `scrawl autocrop-eval --export`), without images: no content maps, so edges

@@ -43,9 +43,11 @@ fn request(command: &str) -> Result<String> {
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
     stream.write_all(command.as_bytes())?;
-    let mut reply = String::new();
-    stream.read_to_string(&mut reply)?;
-    Ok(reply)
+    // Bytes, not a string: a window title from an X11 app can be Latin-1, and one bad byte
+    // must not fail the whole `clients` reply.
+    let mut reply = Vec::new();
+    stream.read_to_end(&mut reply)?;
+    Ok(String::from_utf8_lossy(&reply).into_owned())
 }
 
 fn json<T: for<'de> Deserialize<'de>>(command: &str) -> Result<T> {
@@ -163,6 +165,10 @@ struct Output {
     reserved: [f64; 4],
     #[serde(default)]
     disabled: bool,
+    /// Rotation and flip, as `wl_output`'s transform: odd values turn it a quarter, so its
+    /// `width` and `height` (the mode's) are the other way round on the desk.
+    #[serde(default)]
+    transform: u8,
     #[serde(rename = "activeWorkspace")]
     active_workspace: Option<Workspace>,
     #[serde(rename = "specialWorkspace")]
@@ -173,7 +179,12 @@ impl Output {
     /// Where the output sits in Hyprland's layout (logical pixels).
     fn rect(&self) -> [f64; 4] {
         let scale = if self.scale > 0.0 { self.scale } else { 1.0 };
-        [self.x, self.y, self.width / scale, self.height / scale]
+        let (w, h) = if self.transform % 2 == 1 {
+            (self.height, self.width)
+        } else {
+            (self.width, self.height)
+        };
+        [self.x, self.y, w / scale, h / scale]
     }
 }
 
@@ -211,6 +222,13 @@ pub fn work_area(name: &str, rect: [f64; 4]) -> Option<[f64; 4]> {
 /// display of Hyprland's layout can be the right one in XWayland's), so the point is moved by
 /// the offset between its output's two origins, matched by output name.
 pub fn to_root(x: f64, y: f64) -> (f64, f64) {
+    let (x, y, _) = to_root_scaled(x, y);
+    (x, y)
+}
+
+/// `to_root`, with how many root pixels a layout pixel is on that output (1 unless XWayland
+/// sizes a scaled output in physical pixels).
+fn to_root_scaled(x: f64, y: f64) -> (f64, f64, f64) {
     let outputs = outputs();
     let Some(output) = outputs
         .iter()
@@ -227,23 +245,38 @@ pub fn to_root(x: f64, y: f64) -> (f64, f64) {
             })
         })
     else {
-        return (x, y);
+        return (x, y, 1.0);
     };
     let Some(root) = super::x11::randr_monitors()
         .into_iter()
         .find(|(name, _)| *name == output.name)
         .map(|(_, rect)| rect)
     else {
-        return (x, y);
+        return (x, y, 1.0);
     };
-    let [lx, ly, ..] = output.rect();
-    (x - lx + root[0], y - ly + root[1])
+    layout_to_root(output.rect(), root, x, y)
+}
+
+/// A point on an output at `layout` (Hyprland's logical pixels) in the same output's `root`
+/// rect, with the ratio between the two sizes.
+fn layout_to_root(layout: [f64; 4], root: [f64; 4], x: f64, y: f64) -> (f64, f64, f64) {
+    let ratio = if layout[2] > 0.0 && root[2] > 0.0 {
+        root[2] / layout[2]
+    } else {
+        1.0
+    };
+    (
+        (x - layout[0]) * ratio + root[0],
+        (y - layout[1]) * ratio + root[1],
+        ratio,
+    )
 }
 
 /// A rect in Hyprland's layout as root pixels (moved with the output under its centre).
 pub fn rect_to_root(rect: [f64; 4]) -> [f64; 4] {
-    let (cx, cy) = to_root(rect[0] + rect[2] / 2.0, rect[1] + rect[3] / 2.0);
-    [cx - rect[2] / 2.0, cy - rect[3] / 2.0, rect[2], rect[3]]
+    let (cx, cy, ratio) = to_root_scaled(rect[0] + rect[2] / 2.0, rect[1] + rect[3] / 2.0);
+    let (w, h) = (rect[2] * ratio, rect[3] * ratio);
+    [cx - w / 2.0, cy - h / 2.0, w, h]
 }
 
 /// The focused window.
@@ -380,9 +413,13 @@ pub fn bind(binds: &[(&str, String)]) -> Result<()> {
         .filter(|(_, combo)| !combo.is_empty())
         .map(|(name, combo)| ((*name).to_owned(), combo.clone()))
         .collect();
+    // Held across the eval, so a config reload's rebind (`follow_events`) can't run between
+    // it and storing the binds, and put the old ones back after the new.
+    let mut held = BINDS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     eval(&bind_lua(&binds))?;
     scrawl_log(format!("hyprland: bound {binds:?}"));
-    *BINDS.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = binds;
+    *held = binds;
+    drop(held);
     watch_reloads();
     Ok(())
 }
@@ -395,11 +432,19 @@ fn watch_reloads() {
         let _ = std::thread::Builder::new()
             .name("scrawl-hyprland-events".into())
             .spawn(|| {
+                // Back off while the socket stays away (Hyprland restarting or gone), so the
+                // log doesn't gain a line every two seconds forever.
+                let mut wait = Duration::from_secs(2);
                 loop {
+                    let started = std::time::Instant::now();
                     if let Err(error) = follow_events() {
                         scrawl_log(format!("hyprland: event socket: {error:#}"));
                     }
-                    std::thread::sleep(Duration::from_secs(2));
+                    if started.elapsed() > Duration::from_secs(60) {
+                        wait = Duration::from_secs(2);
+                    }
+                    std::thread::sleep(wait);
+                    wait = (wait * 2).min(Duration::from_secs(300));
                 }
             });
     });
@@ -411,13 +456,17 @@ fn follow_events() -> Result<()> {
         .context("Not a Hyprland session")?
         .join(".socket2.sock");
     let stream = UnixStream::connect(path)?;
-    for line in std::io::BufReader::new(stream).lines() {
-        let line = line?;
-        if line.starts_with("configreloaded>>") {
-            let binds = BINDS
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone();
+    let mut reader = std::io::BufReader::new(stream);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        // Raw lines: an event naming a window can carry its title, which needn't be UTF-8.
+        if reader.read_until(b'\n', &mut line)? == 0 {
+            bail!("closed");
+        }
+        if line.starts_with(b"configreloaded>>") {
+            // Held across the eval, as in `bind`.
+            let binds = BINDS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if !binds.is_empty()
                 && let Err(error) = eval(&bind_lua(&binds))
             {
@@ -425,7 +474,6 @@ fn follow_events() -> Result<()> {
             }
         }
     }
-    Ok(())
 }
 
 // MARK: The share dialog
@@ -450,8 +498,11 @@ pub fn close_share_dialog() {
     let _ = std::thread::Builder::new()
         .name("scrawl-hyprland-share-dialog".into())
         .spawn(move || {
-            for _ in 0..20 {
-                if SHARE_REQUESTS.load(Ordering::Acquire) != request {
+            for attempt in 0..20 {
+                // The first look always counts: the portal shows one dialog at a time, so a
+                // dialog up now is the cancelled request's, even if a new request has started
+                // (it waits behind this one). Later, a dialog could be the new request's.
+                if attempt > 0 && SHARE_REQUESTS.load(Ordering::Acquire) != request {
                     return;
                 }
                 let pickers = portal_children();
@@ -561,7 +612,7 @@ mod tests {
     }
 
     #[test]
-    fn window_ids_stay_clear_of_x11_ids() {
+    fn clients_parse_with_hyprland_window_ids() {
         let client: Client = serde_json::from_str(
             r#"{"address":"0x55bca1f25da0","mapped":true,"at":[1,2],"size":[3,4],
                 "workspace":{"id":1},"class":"kitty","title":"t","pid":7,"tags":["terminal*"]}"#,
@@ -569,5 +620,33 @@ mod tests {
         .unwrap();
         assert!(matches!(client.id(), super::super::WindowId::Hyprland(_)));
         assert_eq!((client.at, client.size), ([1.0, 2.0], [3.0, 4.0]));
+    }
+
+    #[test]
+    fn rotated_and_scaled_outputs_have_their_size_on_the_desk() {
+        let output = |transform: u8, scale: f64| -> Output {
+            serde_json::from_value(serde_json::json!({
+                "name": "DP-1", "x": 2560, "y": 0, "width": 2560, "height": 1440,
+                "scale": scale, "transform": transform,
+            }))
+            .unwrap()
+        };
+        assert_eq!(output(0, 1.0).rect(), [2560.0, 0.0, 2560.0, 1440.0]);
+        // A quarter turn (1, 3) and flipped quarter turns (5, 7) stand the display up.
+        assert_eq!(output(1, 1.0).rect(), [2560.0, 0.0, 1440.0, 2560.0]);
+        assert_eq!(output(7, 1.0).rect(), [2560.0, 0.0, 1440.0, 2560.0]);
+        assert_eq!(output(2, 2.0).rect(), [2560.0, 0.0, 1280.0, 720.0]);
+    }
+
+    #[test]
+    fn layout_points_move_into_root_pixels_with_the_outputs_scale() {
+        // Same size in both spaces: only the origin moves.
+        let (x, y, ratio) =
+            layout_to_root([0.0, 180.0, 2560.0, 1080.0], [2560.0, 0.0, 2560.0, 1080.0], 10.0, 190.0);
+        assert_eq!((x, y, ratio), (2570.0, 10.0, 1.0));
+        // XWayland sizing a scale-2 output in physical pixels: offsets double.
+        let (x, y, ratio) =
+            layout_to_root([1280.0, 0.0, 1280.0, 720.0], [0.0, 0.0, 2560.0, 1440.0], 1290.0, 10.0);
+        assert_eq!((x, y, ratio), (20.0, 20.0, 2.0));
     }
 }

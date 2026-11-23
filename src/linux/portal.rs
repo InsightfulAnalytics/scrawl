@@ -93,10 +93,15 @@ fn crop_within(rect: [f64; 4], shared: [f64; 4]) -> Option<[u32; 4]> {
     if sw <= 0.0 || sh <= 0.0 {
         return None;
     }
+    // The rect's edges, clamped to the display: a rect hanging off the left or top loses that
+    // part from its size too, not only from its offset.
     let x = (rect[0] - sx).clamp(0.0, sw);
     let y = (rect[1] - sy).clamp(0.0, sh);
-    let w = rect[2].min(sw - x).max(2.0);
-    let h = rect[3].min(sh - y).max(2.0);
+    let right = (rect[0] + rect[2] - sx).clamp(0.0, sw);
+    let bottom = (rect[1] + rect[3] - sy).clamp(0.0, sh);
+    let w = (right - x).max(2.0).min(sw);
+    let h = (bottom - y).max(2.0).min(sh);
+    let (x, y) = (x.min(sw - w), y.min(sh - h));
     Some([x as u32, y as u32, (w as u32) & !1, (h as u32) & !1])
 }
 
@@ -141,6 +146,13 @@ fn hyprland_source(target: &TargetInfo, rect: [f64; 4], stopping: &AtomicBool) -
         scrawl_log(format!("portal: shared {shared:?}, not the display at {:?}", asked.rect));
         save_token(&display_token_key(shared), saved_token(&key).as_deref());
         save_token(&key, None);
+        // Clicks, ink and the crop are placed against the display that was asked for, so a
+        // recording of another one would put them all in the wrong place. The choice is kept
+        // for that display; this recording stops (dropping `session` ends it).
+        bail!(
+            "Another display was shared than the one being recorded. Choose the display under \
+             the pointer in the sharing dialog, or start the recording on the other display"
+        );
     }
     let crop = match (target.mode, session.rect) {
         (CaptureMode::Region | CaptureMode::Window, Some(shared)) => crop_within(rect, shared),
@@ -238,6 +250,28 @@ fn saved_token(key: &str) -> Option<String> {
     value[key].as_str().map(str::to_owned)
 }
 
+/// The person closed the screen-sharing dialog, or chose nothing in it.
+#[derive(Debug)]
+struct SharingCancelled;
+
+impl std::fmt::Display for SharingCancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Screen sharing was cancelled: no screen was chosen in the dialog")
+    }
+}
+
+impl std::error::Error for SharingCancelled {}
+
+/// A portal request's answer as an error. The call itself going through says nothing about
+/// the answer: Hyprland's portal shows its picker inside `SelectSources` and ends the session
+/// when the picker returns nothing, so `Start` on it would only report "Invalid session".
+fn portal_answer(error: ashpd::Error) -> anyhow::Error {
+    match error {
+        ashpd::Error::Response(ashpd::desktop::ResponseError::Cancelled) => SharingCancelled.into(),
+        other => anyhow::Error::new(other).context("The screen-sharing dialog failed"),
+    }
+}
+
 fn save_token(key: &str, token: Option<&str>) {
     let path = state_path();
     let mut value: serde_json::Value = std::fs::read(&path)
@@ -303,8 +337,14 @@ fn portal_screencast_keyed(window: bool, key: &str, stopping: &AtomicBool) -> Re
                                     PersistMode::ExplicitlyRevoked
                                 },
                             )
-                            .await?;
-                        let streams = proxy.start(&session, None).await?.response()?;
+                            .await?
+                            .response()
+                            .map_err(portal_answer)?;
+                        let streams = proxy
+                            .start(&session, None)
+                            .await?
+                            .response()
+                            .map_err(portal_answer)?;
                         if !window {
                             save_token(&thread_key, streams.restore_token());
                         }
@@ -357,7 +397,10 @@ fn portal_screencast_keyed(window: bool, key: &str, stopping: &AtomicBool) -> Re
         match ready_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Ok(stream)) => break stream,
             Ok(Err(error)) => {
-                save_token(&key, None);
+                // A cancel in the dialog says nothing about the saved choice: keep it.
+                if !error.is::<SharingCancelled>() {
+                    save_token(&key, None);
+                }
                 return Err(error);
             }
             Err(flume::RecvTimeoutError::Timeout) => {}
@@ -627,6 +670,11 @@ mod tests {
         assert_eq!(crop_within([2570.0, 10.0, 301.0, 201.0], display), Some([10, 10, 300, 200]));
         // A window hanging off the right edge is cut at the edge.
         assert_eq!(crop_within([4900.0, 0.0, 400.0, 100.0], display), Some([2340, 0, 220, 100]));
+        // Hanging off the left or the top: the part outside comes off the size as well.
+        assert_eq!(crop_within([2500.0, 0.0, 400.0, 100.0], display), Some([0, 0, 340, 100]));
+        assert_eq!(crop_within([2600.0, -50.0, 100.0, 150.0], display), Some([40, 0, 100, 100]));
+        // Wholly outside: a sliver at the nearest edge rather than past it.
+        assert_eq!(crop_within([0.0, 0.0, 100.0, 100.0], display), Some([0, 0, 2, 100]));
         assert_eq!(crop_within([0.0, 0.0, 10.0, 10.0], [0.0, 0.0, 0.0, 0.0]), None);
         assert_eq!(display_token_key(display), "screencast@2560,0,2560x1080");
     }

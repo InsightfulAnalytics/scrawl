@@ -195,11 +195,52 @@ fn plain_path(path: PathBuf) -> PathBuf {
 pub fn load_bundle(bundle_dir: &Path) -> Result<(PathBuf, ScrawlBundle)> {
     let directory = resolve_bundle_dir(bundle_dir)?;
     let path = directory.join("scrawl.json");
-    let bundle = serde_json::from_slice(
+    let bundle: ScrawlBundle = serde_json::from_slice(
         &fs::read(&path).with_context(|| format!("Could not read {}", path.display()))?,
     )
     .with_context(|| format!("Invalid bundle manifest: {}", path.display()))?;
+    // Every caller joins these names onto the bundle folder and reads, copies, attaches or
+    // pastes the file, so a manifest from elsewhere must not name a file outside it.
+    let mut names = vec![("contactSheet", bundle.contact_sheet.as_str())];
+    names.extend(bundle.video.as_deref().map(|v| ("video", v)));
+    names.extend(bundle.audio.as_deref().map(|a| ("audio", a)));
+    names.extend(
+        bundle
+            .keyframes
+            .iter()
+            .map(|k| ("keyframes[].file", k.file.as_str())),
+    );
+    if let Some(crop) = &bundle.autocrop {
+        names.push((
+            "autocrop.fullContactSheet",
+            crop.full_contact_sheet.as_str(),
+        ));
+        names.push(("autocrop.fullFrames", crop.full_frames.as_str()));
+    }
+    for (field, name) in names {
+        bundle_file(&directory, name)
+            .with_context(|| format!("Invalid bundle manifest {}: {field}", path.display()))?;
+    }
     Ok((directory, bundle))
+}
+
+/// `name`, a file a manifest names, inside `directory`: a relative path of plain components
+/// that, once symlinks are followed, is still inside the folder. An empty name is the folder.
+pub fn bundle_file(directory: &Path, name: &str) -> Result<PathBuf> {
+    let relative = Path::new(name);
+    ensure!(
+        !relative.is_absolute()
+            && relative.components().all(|part| matches!(
+                part,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )),
+        "{name:?} is not a file inside the bundle"
+    );
+    let path = directory.join(relative);
+    if let (Ok(real), Ok(root)) = (path.canonicalize(), directory.canonicalize()) {
+        ensure!(real.starts_with(&root), "{name:?} leads outside the bundle");
+    }
+    Ok(path)
 }
 
 #[cfg(target_os = "macos")]
@@ -668,17 +709,7 @@ fn random_hex_token_32() -> Result<String> {
 /// Returns `ingestToken` from `path`, generating a 32-byte hex token and writing `path` back with
 /// mode `0600` (while preserving all other JSON keys) if `ingestToken` is absent or empty.
 pub fn ensure_ingest_token_in(path: &Path) -> Result<String> {
-    let mut map = match fs::read(path) {
-        Ok(bytes) if !bytes.iter().all(u8::is_ascii_whitespace) => {
-            match serde_json::from_slice::<serde_json::Value>(&bytes)
-                .with_context(|| format!("Invalid JSON in {}", path.display()))?
-            {
-                serde_json::Value::Object(map) => map,
-                _ => bail!("Expected a JSON object in {}", path.display()),
-            }
-        }
-        Ok(_) | Err(_) => serde_json::Map::new(),
-    };
+    let mut map = read_config_for_update(path)?;
 
     if let Some(existing) = map
         .get("ingestToken")
@@ -694,34 +725,64 @@ pub fn ensure_ingest_token_in(path: &Path) -> Result<String> {
         "ingestToken".to_owned(),
         serde_json::Value::String(token.clone()),
     );
+    write_config(path, &serde_json::Value::Object(map))?;
+    Ok(token)
+}
+
+/// The config at `path` as a JSON object to change: `{}` when there is none yet (or it's
+/// empty), an error when it can't be read or isn't a JSON object, so a typo in a hand-edited
+/// file is never written over with only the key being set.
+fn read_config_for_update(path: &Path) -> Result<serde_json::Map<String, serde_json::Value>> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Default::default()),
+        Err(error) => {
+            return Err(error).with_context(|| format!("Could not read {}", path.display()));
+        }
+    };
+    if bytes.iter().all(u8::is_ascii_whitespace) {
+        return Ok(Default::default());
+    }
+    match serde_json::from_slice::<serde_json::Value>(&bytes).with_context(|| {
+        format!(
+            "Invalid JSON in {}; fix it before changing settings",
+            path.display()
+        )
+    })? {
+        serde_json::Value::Object(map) => Ok(map),
+        _ => bail!("Expected a JSON object in {}", path.display()),
+    }
+}
+
+/// Writes the config whole: a temporary file made `0600` from the start (it holds the ingest
+/// token), then renamed over `path`, so a reader never sees half a file.
+fn write_config(path: &Path, config: &serde_json::Value) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
         fs::create_dir_all(parent)
             .with_context(|| format!("Could not create {}", parent.display()))?;
     }
-    let mut body = serde_json::to_vec_pretty(&serde_json::Value::Object(map))?;
+    let tmp = path.with_extension("json.tmp");
+    let mut body = serde_json::to_vec_pretty(config)?;
     body.push(b'\n');
-    #[cfg(unix)]
+    let _ = fs::remove_file(&tmp);
     {
         use std::io::Write as _;
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)
-            .with_context(|| format!("Could not write {}", path.display()))?;
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&tmp)
+            .with_context(|| format!("Could not write {}", tmp.display()))?;
         file.write_all(&body)?;
         file.sync_all()?;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
     }
-    #[cfg(not(unix))]
-    {
-        fs::write(path, &body).with_context(|| format!("Could not write {}", path.display()))?;
-    }
-    Ok(token)
+    fs::rename(&tmp, path).with_context(|| format!("Could not write {}", path.display()))
 }
 
 pub fn ensure_ingest_token() -> Result<String> {
@@ -846,32 +907,16 @@ pub fn pill_style() -> crate::native::pill::PillStyle {
 /// Sets one top-level key in `path` (`null` removes it), keeping the rest (and its `0600` mode,
 /// since it holds the ingest token).
 pub fn set_config_value_in(path: &Path, key: &str, value: serde_json::Value) -> Result<()> {
-    let mut config = fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .filter(serde_json::Value::is_object)
-        .unwrap_or_else(|| serde_json::json!({}));
-    match (value, config.as_object_mut()) {
-        (serde_json::Value::Null, Some(map)) => {
+    let mut map = read_config_for_update(path)?;
+    match value {
+        serde_json::Value::Null => {
             map.remove(key);
         }
-        (value, _) => config[key] = value,
+        value => {
+            map.insert(key.to_owned(), value);
+        }
     }
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent)?;
-    }
-    let tmp = path.with_extension("json.tmp");
-    let mut body = serde_json::to_vec_pretty(&config)?;
-    body.push(b'\n');
-    fs::write(&tmp, body)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
-    }
-    fs::rename(&tmp, path).with_context(|| format!("Could not write {}", path.display()))
+    write_config(path, &serde_json::Value::Object(map))
 }
 
 /// Bundle IDs whose `Documents/Scrawl` (and legacy `Documents/Tether`) container the USB watcher
@@ -1600,7 +1645,11 @@ pub fn extract_frames_range(
                     "-y",
                     "-ss",
                 ])
-                .arg(format!("{:.3}", from_ms as f64 / 1_000.0))
+                // The movie's clock starts `offset_ms` into the bundle's, as `movie_frames_at`.
+                .arg(format!(
+                    "{:.3}",
+                    from_ms.saturating_sub(offset_ms) as f64 / 1_000.0
+                ))
                 .args(["-threads", "1", "-filter_threads", "1"])
                 .arg("-i")
                 .arg(&video)
@@ -1815,6 +1864,36 @@ mod tests {
     }
 
     #[test]
+    fn manifests_cannot_name_files_outside_their_bundle() {
+        let fixture = Fixture::new();
+        let path = fixture.bundle("example", 123);
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(path.join("scrawl.json")).unwrap()).unwrap();
+        let outside = fixture.0.join("secret.txt");
+        fs::write(&outside, "secret").unwrap();
+        let with = |field: &str, value: &str| {
+            let mut m = manifest.clone();
+            m[field] = value.into();
+            fs::write(path.join("scrawl.json"), m.to_string()).unwrap();
+            load_bundle(&path)
+        };
+        assert!(with("contactSheet", &outside.to_string_lossy()).is_err());
+        assert!(with("contactSheet", "../secret.txt").is_err());
+        assert!(with("video", "frames/../../secret.txt").is_err());
+        assert!(with("audio", &outside.to_string_lossy()).is_err());
+        let mut m = manifest.clone();
+        m["keyframes"][0]["file"] = "../secret.txt".into();
+        fs::write(path.join("scrawl.json"), m.to_string()).unwrap();
+        assert!(load_bundle(&path).is_err(), "a keyframe outside the bundle");
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&outside, path.join("linked.png")).unwrap();
+            assert!(with("contactSheet", "linked.png").is_err());
+        }
+        assert!(with("contactSheet", "contact-sheet.png").is_ok());
+    }
+
+    #[test]
     fn frame_fallback_uses_manifest_times_not_file_indices() {
         let fixture = Fixture::new();
         let path = fixture.bundle("example", 123);
@@ -1981,6 +2060,23 @@ mod tests {
         let config = load_config_from(&path);
         assert_eq!(config.transcriber.as_deref(), Some("command"));
         assert_eq!(config.auto_send, Some(false));
+    }
+
+    #[test]
+    fn a_config_with_a_typo_is_never_written_over() {
+        let fixture = Fixture::new();
+        let path = fixture.0.join("config.json");
+        let typo = br#"{"ingestToken":"abc","capturesDir":"/x",}"#;
+        fs::write(&path, typo).unwrap();
+        assert!(set_config_value_in(&path, "autoSend", false.into()).is_err());
+        assert!(ensure_ingest_token_in(&path).is_err());
+        assert_eq!(fs::read(&path).unwrap(), typo, "left as it was");
+        // No config yet, or an empty one, starts from nothing.
+        fs::write(&path, b"  \n").unwrap();
+        set_config_value_in(&path, "autoSend", false.into()).unwrap();
+        fs::remove_file(&path).unwrap();
+        set_config_value_in(&path, "autoSend", false.into()).unwrap();
+        assert!(!path.with_extension("json.tmp").exists());
     }
 
     #[test]

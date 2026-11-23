@@ -1240,10 +1240,9 @@ pub fn run_ingest_server(port: u16, usb: bool, no_opencode: bool) -> Result<()> 
 /// phone on Wi-Fi can't upload, but `/sdk.js` registrations from local dev pages and
 /// `scrawl serve` clients on this machine still reach it.
 fn serve_http(port: u16, config: IngestConfig) -> Result<()> {
-    let addr = format!("127.0.0.1:{port}");
-    let listener = std::net::TcpListener::bind(&addr)
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))
         .with_context(|| format!("port {port} already in use"))?;
-    scrawl_log(format!("ingest server listening on {addr}"));
+    scrawl_log(format!("ingest server listening on 127.0.0.1:{port}"));
     crate::web::set_serving();
     // Only the process that owns the port retries deliveries, so two never race over a bundle.
     if config.route_opencode {
@@ -1570,7 +1569,14 @@ fn handle_ingest_connection_with_token(
     let json_bytes = &payload[4..4 + json_len];
     let timeline: Timeline = serde_json::from_slice(json_bytes).unwrap_or_default();
     let staging = std::env::temp_dir().join(format!("scrawl-ingest-{}", crate::make_bundle_id()));
-    std::fs::create_dir_all(&staging)?;
+    // A new folder only this user can open: `create`, not `create_dir_all`, so a folder another
+    // account made in the shared temp folder first (with links in it) is refused, not used.
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder
+        .create(&staging)
+        .with_context(|| format!("Could not create {}", staging.display()))?;
     let timeline_path = staging.join("timeline.json");
     let movie_path = staging.join("recording.mp4");
     std::fs::write(&timeline_path, json_bytes)?;
@@ -2020,6 +2026,55 @@ mod tests {
         assert!(format_setup_link("updown", &["ftp://1.2.3.4:47777".into()], "tok", None).is_err());
         assert!(format_setup_link("updown", &["http://1.2.3.4:47777".into()], "", None).is_err());
         assert!(format_setup_link("", &["http://1.2.3.4:47777".into()], "tok", None).is_err());
+    }
+
+    /// SECURITY-RULES.md rule 1: every server Scrawl opens listens on this machine only. Any
+    /// `bind` in the source must name a loopback address right there in the call.
+    #[test]
+    fn every_listener_binds_loopback_only() {
+        fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    sources(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        sources(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut files,
+        );
+        let mut binds = 0;
+        for file in files {
+            let text = std::fs::read_to_string(&file).unwrap();
+            for marker in ["TcpListener::bind(", "UdpSocket::bind(", "TcpSocket::bind("] {
+                for (at, _) in text.match_indices(marker) {
+                    // The names in this test's own list are strings, not calls.
+                    if text[..at].ends_with('"') {
+                        continue;
+                    }
+                    let rest = &text[at + marker.len()..];
+                    let call = &rest[..rest.find(')').unwrap_or(rest.len())];
+                    binds += 1;
+                    assert!(
+                        {
+                            // The address, the call's first part: `"127.0.0.1…"` or
+                            // `(…Ipv4Addr::LOCALHOST, port)`.
+                            let host = call.trim_start_matches('(').split(',').next().unwrap();
+                            host.starts_with("\"127.0.0.1:")
+                                || host.starts_with("\"127.0.0.1\"")
+                                || host.trim_end().ends_with("Ipv4Addr::LOCALHOST")
+                        },
+                        "{}: {marker}{call}) may listen beyond this machine",
+                        file.display()
+                    );
+                }
+            }
+        }
+        assert!(binds >= 3, "found the listeners ({binds})");
     }
 
     fn send_raw_http_request(request: &[u8], expected_token: &str) -> String {
