@@ -1040,7 +1040,9 @@ pub fn rebuild_screen_bundle_with(
     let video = old
         .video
         .as_ref()
-        .map(|name| out.join(name))
+        // The name can come from a recovery journal: it must be a file inside the bundle too.
+        .map(|name| handoff::bundle_file(out, name))
+        .transpose()?
         .filter(|p| p.is_file())
         .context("The bundle has no video")?;
     let wav = out.join("audio.wav");
