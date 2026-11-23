@@ -373,7 +373,7 @@ fn shrinkable(dir: &Path, manifest: &Manifest) -> Option<PathBuf> {
     {
         return None;
     }
-    let video = dir.join(manifest.video.as_deref()?);
+    let video = crate::handoff::bundle_file(dir, manifest.video.as_deref()?).ok()?;
     let bytes = video.metadata().ok()?.len();
     let bps = bytes.saturating_mul(8_000) / manifest.duration_ms;
     (bps > SHRINK_ABOVE_BPS).then_some(video)
@@ -997,7 +997,10 @@ mod tests {
     fn policy_reads_presets_nulls_and_keeps_other_keys() {
         let tmp = TempDir::new("config");
         let path = tmp.0.join("config.json");
-        assert_eq!(Policy::load_checked_from(&path).unwrap(), Preset::Week.policy());
+        assert_eq!(
+            Policy::load_checked_from(&path).unwrap(),
+            Preset::Week.policy()
+        );
         std::fs::write(
             &path,
             r#"{"ingestToken":"abc","agentHost":"studio","retention":{"mediaDays":null}}"#,
@@ -1013,7 +1016,10 @@ mod tests {
         );
         assert_eq!(loaded.preset(), None);
         Preset::Forever.policy().save_to(&path).unwrap();
-        assert_eq!(Policy::load_checked_from(&path).unwrap().preset(), Some(Preset::Forever));
+        assert_eq!(
+            Policy::load_checked_from(&path).unwrap().preset(),
+            Some(Preset::Forever)
+        );
         let config: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(config["ingestToken"], "abc");

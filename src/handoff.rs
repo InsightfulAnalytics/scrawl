@@ -195,11 +195,45 @@ fn plain_path(path: PathBuf) -> PathBuf {
 pub fn load_bundle(bundle_dir: &Path) -> Result<(PathBuf, ScrawlBundle)> {
     let directory = resolve_bundle_dir(bundle_dir)?;
     let path = directory.join("scrawl.json");
-    let bundle = serde_json::from_slice(
+    let bundle: ScrawlBundle = serde_json::from_slice(
         &fs::read(&path).with_context(|| format!("Could not read {}", path.display()))?,
     )
     .with_context(|| format!("Invalid bundle manifest: {}", path.display()))?;
+    // Every caller joins these names onto the bundle folder and reads, copies, attaches or
+    // pastes the file, so a manifest from elsewhere must not name a file outside it.
+    let mut names = vec![("contactSheet", bundle.contact_sheet.as_str())];
+    names.extend(bundle.video.as_deref().map(|v| ("video", v)));
+    if let Some(crop) = &bundle.autocrop {
+        names.push((
+            "autocrop.fullContactSheet",
+            crop.full_contact_sheet.as_str(),
+        ));
+        names.push(("autocrop.fullFrames", crop.full_frames.as_str()));
+    }
+    for (field, name) in names {
+        bundle_file(&directory, name)
+            .with_context(|| format!("Invalid bundle manifest {}: {field}", path.display()))?;
+    }
     Ok((directory, bundle))
+}
+
+/// `name`, a file a manifest names, inside `directory`: a relative path of plain components
+/// that, once symlinks are followed, is still inside the folder. An empty name is the folder.
+pub fn bundle_file(directory: &Path, name: &str) -> Result<PathBuf> {
+    let relative = Path::new(name);
+    ensure!(
+        !relative.is_absolute()
+            && relative.components().all(|part| matches!(
+                part,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )),
+        "{name:?} is not a file inside the bundle"
+    );
+    let path = directory.join(relative);
+    if let (Ok(real), Ok(root)) = (path.canonicalize(), directory.canonicalize()) {
+        ensure!(real.starts_with(&root), "{name:?} leads outside the bundle");
+    }
+    Ok(path)
 }
 
 #[cfg(target_os = "macos")]
@@ -1816,6 +1850,31 @@ mod tests {
         assert_eq!(bundle.created_at_ms, 123);
         fs::write(path.join("scrawl.json"), b"not json").unwrap();
         assert!(load_bundle(&path).is_err());
+    }
+
+    #[test]
+    fn manifests_cannot_name_files_outside_their_bundle() {
+        let fixture = Fixture::new();
+        let path = fixture.bundle("example", 123);
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(path.join("scrawl.json")).unwrap()).unwrap();
+        let outside = fixture.0.join("secret.txt");
+        fs::write(&outside, "secret").unwrap();
+        let with = |field: &str, value: &str| {
+            let mut m = manifest.clone();
+            m[field] = value.into();
+            fs::write(path.join("scrawl.json"), m.to_string()).unwrap();
+            load_bundle(&path)
+        };
+        assert!(with("contactSheet", &outside.to_string_lossy()).is_err());
+        assert!(with("contactSheet", "../secret.txt").is_err());
+        assert!(with("video", "frames/../../secret.txt").is_err());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&outside, path.join("linked.png")).unwrap();
+            assert!(with("contactSheet", "linked.png").is_err());
+        }
+        assert!(with("contactSheet", "contact-sheet.png").is_ok());
     }
 
     #[test]

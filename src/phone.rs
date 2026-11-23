@@ -1570,7 +1570,14 @@ fn handle_ingest_connection_with_token(
     let json_bytes = &payload[4..4 + json_len];
     let timeline: Timeline = serde_json::from_slice(json_bytes).unwrap_or_default();
     let staging = std::env::temp_dir().join(format!("scrawl-ingest-{}", crate::make_bundle_id()));
-    std::fs::create_dir_all(&staging)?;
+    // A new folder only this user can open: `create`, not `create_dir_all`, so a folder another
+    // account made in the shared temp folder first (with links in it) is refused, not used.
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder
+        .create(&staging)
+        .with_context(|| format!("Could not create {}", staging.display()))?;
     let timeline_path = staging.join("timeline.json");
     let movie_path = staging.join("recording.mp4");
     std::fs::write(&timeline_path, json_bytes)?;
