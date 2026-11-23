@@ -114,17 +114,38 @@ impl Policy {
         Preset::ALL.into_iter().find(|p| p.policy() == *self)
     }
 
-    pub fn load() -> Self {
-        Self::load_from(&crate::handoff::default_config_path())
+    /// The policy to show in Settings: the default when the config can't be read.
+    pub fn load_from(path: &Path) -> Self {
+        Self::load_checked_from(path).unwrap_or_default()
     }
 
-    pub fn load_from(path: &Path) -> Self {
-        std::fs::read(path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-            .and_then(|config| config.get("retention").cloned())
-            .and_then(|value| serde_json::from_value(value).ok())
-            .unwrap_or_default()
+    /// The policy cleanup acts on. Unlike `load_from`, a config that can't be read, isn't JSON
+    /// or has a `retention` value that doesn't parse is an error, not the default: a typo must
+    /// not turn "keep forever" into "trash after 30 days". No config or no key is the default.
+    pub fn load_checked() -> Result<Self> {
+        Self::load_checked_from(&crate::handoff::default_config_path())
+    }
+
+    pub fn load_checked_from(path: &Path) -> Result<Self> {
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self::default());
+            }
+            Err(error) => {
+                return Err(error).with_context(|| format!("Could not read {}", path.display()));
+            }
+        };
+        if bytes.iter().all(u8::is_ascii_whitespace) {
+            return Ok(Self::default());
+        }
+        let config: serde_json::Value = serde_json::from_slice(&bytes)
+            .with_context(|| format!("Invalid JSON in {}", path.display()))?;
+        match config.get("retention") {
+            None => Ok(Self::default()),
+            Some(value) => serde_json::from_value(value.clone())
+                .with_context(|| format!("Invalid \"retention\" in {}", path.display())),
+        }
     }
 
     /// Writes `"retention"`, keeping the rest of the config (and its `0600` mode) as it is.
@@ -275,7 +296,12 @@ pub fn plan(captures: &Path, policy: &Policy, now: SystemTime) -> Vec<Action> {
     };
     let mut bundles: Vec<PathBuf> = entries
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|ext| ext == "scrawl") && p.is_dir())
+        // A real folder only: a symlink named like a bundle would send its target (anywhere
+        // on disk) to the Trash.
+        .filter(|p| {
+            p.extension().is_some_and(|ext| ext == "scrawl")
+                && std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_dir())
+        })
         .collect();
     bundles.sort();
     let mut actions = Vec::new();
@@ -316,7 +342,8 @@ pub fn plan(captures: &Path, policy: &Policy, now: SystemTime) -> Vec<Action> {
             actions.push(Action::TrashBundle(dir));
             continue;
         }
-        if due(policy.media_days) {
+        // A transcript still owed needs `audio.wav` (`speech_model`): its media wait.
+        if due(policy.media_days) && !dir.join(crate::speech_model::PENDING).exists() {
             let items: Vec<PathBuf> = crate::handoff::HEAVY_MEDIA
                 .iter()
                 .chain(&DERIVED_MEDIA)
@@ -449,18 +476,29 @@ fn trash_media(bundle: &Path, items: &[PathBuf], days: u32, trasher: Trasher) ->
         .context("Bundle has no parent")?
         .join(".trash-staging");
     let staging = staging_root.join(format!("{name} media"));
-    let _ = std::fs::remove_dir_all(&staging);
+    // Anything still staged from an earlier try goes back first, so nothing in it is lost.
+    restore_staged(&staging, bundle);
     std::fs::create_dir_all(&staging)?;
     let mut freed = 0;
     let mut moved = Vec::new();
-    for item in items {
+    let staged = items.iter().try_for_each(|item| -> Result<()> {
         let Some(file) = item.file_name() else {
-            continue;
+            return Ok(());
         };
-        freed += size_of(item);
+        let size = size_of(item);
         std::fs::rename(item, staging.join(file))?;
+        freed += size;
         moved.push(file.to_string_lossy().into_owned());
+        Ok(())
+    });
+    // Until the Trash has them, the media are only staged: on any failure they go back into
+    // the bundle, so a Trash that can't take them (another file system) never loses them.
+    if let Err(error) = staged.and_then(|()| trasher(&staging)) {
+        restore_staged(&staging, bundle);
+        let _ = std::fs::remove_dir(&staging_root);
+        return Err(error);
     }
+    let _ = std::fs::remove_dir(&staging_root);
     let note = serde_json::json!({
         "cleanedAtMs": crate::now_epoch_ms(),
         "afterDays": days,
@@ -470,9 +508,27 @@ fn trash_media(bundle: &Path, items: &[PathBuf], days: u32, trasher: Trasher) ->
         bundle.join(MEDIA_CLEANED),
         serde_json::to_vec_pretty(&note)?,
     )?;
-    trasher(&staging)?;
-    let _ = std::fs::remove_dir(&staging_root);
     Ok(freed)
+}
+
+/// Moves what `staging` holds back into `bundle` (a file already back in place is left
+/// staged), then removes `staging` if that emptied it.
+fn restore_staged(staging: &Path, bundle: &Path) {
+    let Ok(entries) = std::fs::read_dir(staging) else {
+        return;
+    };
+    for entry in entries.filter_map(std::result::Result::ok) {
+        let target = bundle.join(entry.file_name());
+        if !target.exists()
+            && let Err(error) = std::fs::rename(entry.path(), &target)
+        {
+            scrawl_log(format!(
+                "retention: could not put {} back: {error}",
+                entry.path().display()
+            ));
+        }
+    }
+    let _ = std::fs::remove_dir(staging);
 }
 
 /// Runs a plan. Each step is checked again just before it runs, in case a capture or a copy
@@ -606,11 +662,33 @@ fn sweep_leftovers(captures: &Path, now: SystemTime) {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let leftover = name.ends_with(".shrinking.mov") || name == ".trash-staging";
-        if leftover
-            && modified_ago(&path, now).is_some_and(|ago| ago > Duration::from_secs(6 * 3600))
-        {
-            let _ = std::fs::remove_dir_all(&path).or_else(|_| std::fs::remove_file(&path));
+        let stale =
+            || modified_ago(&path, now).is_some_and(|ago| ago > Duration::from_secs(6 * 3600));
+        if name.ends_with(".shrinking.mov") && stale() {
+            // A half-encoded copy; the original is still in its bundle.
+            let _ = std::fs::remove_file(&path);
+        } else if name == ".trash-staging" && stale() {
+            // Media a crash left between a bundle and the Trash: they're the only copy, so they
+            // go back into their bundles, never away.
+            if let Ok(staged) = std::fs::read_dir(&path) {
+                for entry in staged.filter_map(std::result::Result::ok) {
+                    let staging = entry.path();
+                    let staging_name = entry.file_name().to_string_lossy().into_owned();
+                    let Some(stem) = staging_name.strip_suffix(" media") else {
+                        continue;
+                    };
+                    let bundle = captures.join(format!("{stem}.scrawl"));
+                    if bundle.is_dir() {
+                        restore_staged(&staging, &bundle);
+                    } else {
+                        scrawl_log(format!(
+                            "retention: {} has no bundle to go back to; left in place",
+                            staging.display()
+                        ));
+                    }
+                }
+            }
+            let _ = std::fs::remove_dir(&path);
         }
     }
 }
@@ -771,7 +849,16 @@ fn worker(jobs: &flume::Receiver<Job>) {
                 next_pass = Instant::now() + Duration::from_secs(60);
                 continue;
             }
-            let policy = Policy::load();
+            let policy = match Policy::load_checked() {
+                Ok(policy) => policy,
+                Err(error) => {
+                    // Nothing is cleaned up on a guess: the next pass tries again.
+                    scrawl_log(format!("retention: pass skipped: {error:#}"));
+                    last_pass = Some(SystemTime::now());
+                    next_pass = Instant::now() + PASS_EVERY;
+                    continue;
+                }
+            };
             let shrink = last_shrink.is_none_or(|at| {
                 SystemTime::now().duration_since(at).unwrap_or_default() >= SHRINK_EVERY
             });
@@ -910,13 +997,13 @@ mod tests {
     fn policy_reads_presets_nulls_and_keeps_other_keys() {
         let tmp = TempDir::new("config");
         let path = tmp.0.join("config.json");
-        assert_eq!(Policy::load_from(&path), Preset::Week.policy());
+        assert_eq!(Policy::load_checked_from(&path).unwrap(), Preset::Week.policy());
         std::fs::write(
             &path,
             r#"{"ingestToken":"abc","agentHost":"studio","retention":{"mediaDays":null}}"#,
         )
         .unwrap();
-        let loaded = Policy::load_from(&path);
+        let loaded = Policy::load_checked_from(&path).unwrap();
         assert_eq!(
             loaded,
             Policy {
@@ -926,7 +1013,7 @@ mod tests {
         );
         assert_eq!(loaded.preset(), None);
         Preset::Forever.policy().save_to(&path).unwrap();
-        assert_eq!(Policy::load_from(&path).preset(), Some(Preset::Forever));
+        assert_eq!(Policy::load_checked_from(&path).unwrap().preset(), Some(Preset::Forever));
         let config: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(config["ingestToken"], "abc");
@@ -934,7 +1021,7 @@ mod tests {
         assert_eq!(config["retention"]["mediaDays"], serde_json::Value::Null);
         Preset::Month.policy().save_to(&path).unwrap();
         assert_eq!(
-            Policy::load_from(&path),
+            Policy::load_checked_from(&path).unwrap(),
             Policy {
                 media_days: Some(30),
                 bundle_days: Some(90)
@@ -1118,5 +1205,76 @@ mod tests {
     fn sizes_read_plainly() {
         assert_eq!(format_bytes(72_247_194), "72 MB");
         assert_eq!(format_bytes(2_512_000_000), "2.5 GB");
+    }
+
+    #[test]
+    fn a_trash_that_refuses_the_media_leaves_them_in_the_bundle() {
+        let tmp = TempDir::new("refuse");
+        let captures = tmp.0.join("captures");
+        let old = bundle(&captures, "scrawl-old", 8.0, false);
+        let refusing = |_: &Path| -> Result<()> { anyhow::bail!("another file system") };
+        let actions = planned(&captures, &Policy::default());
+        assert!(matches!(actions.as_slice(), [Action::TrashMedia { .. }]));
+        let report = apply(&actions, &Policy::default(), &refusing, false);
+        assert_eq!((report.media_trashed, report.errors), (0, 1));
+        assert!(old.join("recording.mp4").is_file() && old.join("audio.wav").is_file());
+        assert!(
+            !old.join(MEDIA_CLEANED).exists(),
+            "no note claims they're in the Trash"
+        );
+        assert!(!captures.join(".trash-staging").exists());
+    }
+
+    #[test]
+    fn media_a_crash_left_staged_go_back_into_their_bundle() {
+        let tmp = TempDir::new("staged");
+        let captures = tmp.0.join("captures");
+        let old = bundle(&captures, "scrawl-old", 8.0, false);
+        let staging = captures.join(".trash-staging/scrawl-old media");
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::rename(old.join("audio.wav"), staging.join("audio.wav")).unwrap();
+        sweep_leftovers(&captures, SystemTime::now() + Duration::from_secs(7 * 3600));
+        assert!(old.join("audio.wav").is_file());
+        assert!(!captures.join(".trash-staging").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_named_like_a_bundle_is_never_cleaned_up() {
+        let tmp = TempDir::new("symlink");
+        let captures = tmp.0.join("captures");
+        let elsewhere = bundle(&tmp.0, "scrawl-0-elsewhere", 40.0, false);
+        std::fs::create_dir_all(&captures).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, captures.join("scrawl-0-link.scrawl")).unwrap();
+        assert!(planned(&captures, &Policy::default()).is_empty());
+    }
+
+    #[test]
+    fn media_wait_while_a_transcript_is_owed() {
+        let tmp = TempDir::new("pending");
+        let captures = tmp.0.join("captures");
+        let old = bundle(&captures, "scrawl-old", 8.0, false);
+        std::fs::write(old.join(crate::speech_model::PENDING), "").unwrap();
+        assert!(planned(&captures, &Policy::default()).is_empty());
+    }
+
+    #[test]
+    fn cleanup_refuses_a_config_it_cannot_read() {
+        let tmp = TempDir::new("checked");
+        let path = tmp.0.join("config.json");
+        assert_eq!(Policy::load_checked_from(&path).unwrap(), Policy::default());
+        std::fs::write(&path, r#"{"agentHost":"studio"}"#).unwrap();
+        assert_eq!(Policy::load_checked_from(&path).unwrap(), Policy::default());
+        std::fs::write(
+            &path,
+            r#"{"retention":{"mediaDays":null,"bundleDays":null},}"#,
+        )
+        .unwrap();
+        assert!(
+            Policy::load_checked_from(&path).is_err(),
+            "a trailing comma"
+        );
+        std::fs::write(&path, r#"{"retention":"forever"}"#).unwrap();
+        assert!(Policy::load_checked_from(&path).is_err(), "not a policy");
     }
 }

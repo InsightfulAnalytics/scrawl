@@ -897,10 +897,9 @@ pub fn finalize_capture_bundle(
         duration_ms,
         video_offset_ms,
     } = recording;
-    anyhow::ensure!(
-        !frames.is_empty(),
-        "No screen frames were captured. Choose a screen in the sharing dialog and try again."
-    );
+    // The narration and the journal are written before anything can fail, so a capture whose
+    // frames didn't come still keeps its audio, and `scrawl recover` can rebuild it from the
+    // movie when there is one.
     if let Some(ref audio) = recorded_audio {
         let wav_path = bundle_dir.join("audio.wav");
         let _ = std::fs::create_dir_all(bundle_dir);
@@ -908,22 +907,29 @@ pub fn finalize_capture_bundle(
     }
     let wav_path = bundle_dir.join("audio.wav");
     let has_wav = wav_path.exists();
-    recover::write(
-        bundle_dir,
-        &recover::Unfinished {
-            target: target.clone(),
-            duration_ms,
-            video: video_path
-                .as_ref()
-                .and_then(|v| v.file_name())
-                .map(|name| name.to_string_lossy().into_owned()),
-            video_offset_ms,
-            strokes: strokes.clone(),
-            events: events.clone(),
-            note: note.clone(),
-            windows: activity.windows.clone(),
-            cursor: activity.cursor.clone(),
-        },
+    // A journal only when there is something to rebuild from.
+    if has_wav || video_path.is_some() {
+        recover::write(
+            bundle_dir,
+            &recover::Unfinished {
+                target: target.clone(),
+                duration_ms,
+                video: video_path
+                    .as_ref()
+                    .and_then(|v| v.file_name())
+                    .map(|name| name.to_string_lossy().into_owned()),
+                video_offset_ms,
+                strokes: strokes.clone(),
+                events: events.clone(),
+                note: note.clone(),
+                windows: activity.windows.clone(),
+                cursor: activity.cursor.clone(),
+            },
+        );
+    }
+    anyhow::ensure!(
+        !frames.is_empty(),
+        "No screen frames were captured. Choose a screen in the sharing dialog and try again."
     );
     let crop_settings = (target.mode == CaptureMode::Display)
         .then(autocrop::Settings::configured)
@@ -1793,16 +1799,24 @@ fn main() -> Result<()> {
                 .filter(|m| m.shape == Shape::Flag)
                 .map(|m| m.t0)
                 .collect();
+            // Never over an existing folder (the source bundle included): `--out` is new.
+            ensure!(!out.exists(), "{} already exists", out.display());
             if let Some(iters) = bench {
                 let iters = iters.max(1);
                 let video_name = video.file_name().context("Bad video name")?.to_owned();
-                let prep_iter = |i: u32| -> Result<(PathBuf, PathBuf)> {
-                    let iter_out = if i + 1 == iters {
+                let iter_dir = |i: u32| {
+                    if i + 1 == iters {
                         out.clone()
                     } else {
                         out.with_file_name(format!("bench-{i}.scrawl"))
-                    };
-                    let _ = std::fs::remove_dir_all(&iter_out);
+                    }
+                };
+                for i in 0..iters {
+                    let dir = iter_dir(i);
+                    ensure!(!dir.exists(), "{} already exists", dir.display());
+                }
+                let prep_iter = |i: u32| -> Result<(PathBuf, PathBuf)> {
+                    let iter_out = iter_dir(i);
                     std::fs::create_dir_all(&iter_out)?;
                     let linked = iter_out.join(&video_name);
                     std::fs::hard_link(&video, &linked)
@@ -1929,7 +1943,6 @@ fn main() -> Result<()> {
                 );
                 return Ok(());
             }
-            ensure!(!out.exists(), "{} already exists", out.display());
             std::fs::create_dir_all(&out)?;
             let copied = out.join(video.file_name().context("Bad video name")?);
             std::fs::copy(&video, &copied)?;
@@ -2139,8 +2152,12 @@ fn main() -> Result<()> {
             days_ahead,
         } => {
             let captures = captures.unwrap_or_else(handoff::default_captures_dir);
-            let policy = retention::Policy::load();
-            let ahead = Duration::from_secs_f64(days_ahead.max(0.0) * 86_400.0);
+            let policy = retention::Policy::load_checked()?;
+            anyhow::ensure!(
+                days_ahead.is_finite(),
+                "--days-ahead takes a number of days"
+            );
+            let ahead = Duration::from_secs_f64(days_ahead.clamp(0.0, 100.0 * 365.0) * 86_400.0);
             let (actions, report) = retention::run_pass(&captures, &policy, dry_run, ahead, true);
             for action in &actions {
                 let line = match action {
