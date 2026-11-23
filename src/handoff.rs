@@ -203,6 +203,13 @@ pub fn load_bundle(bundle_dir: &Path) -> Result<(PathBuf, ScrawlBundle)> {
     // pastes the file, so a manifest from elsewhere must not name a file outside it.
     let mut names = vec![("contactSheet", bundle.contact_sheet.as_str())];
     names.extend(bundle.video.as_deref().map(|v| ("video", v)));
+    names.extend(bundle.audio.as_deref().map(|a| ("audio", a)));
+    names.extend(
+        bundle
+            .keyframes
+            .iter()
+            .map(|k| ("keyframes[].file", k.file.as_str())),
+    );
     if let Some(crop) = &bundle.autocrop {
         names.push((
             "autocrop.fullContactSheet",
@@ -1873,6 +1880,11 @@ mod tests {
         assert!(with("contactSheet", &outside.to_string_lossy()).is_err());
         assert!(with("contactSheet", "../secret.txt").is_err());
         assert!(with("video", "frames/../../secret.txt").is_err());
+        assert!(with("audio", &outside.to_string_lossy()).is_err());
+        let mut m = manifest.clone();
+        m["keyframes"][0]["file"] = "../secret.txt".into();
+        fs::write(path.join("scrawl.json"), m.to_string()).unwrap();
+        assert!(load_bundle(&path).is_err(), "a keyframe outside the bundle");
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(&outside, path.join("linked.png")).unwrap();
