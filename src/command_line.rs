@@ -86,9 +86,21 @@ fn writable(dir: &Path) -> bool {
     dir.is_dir() && unsafe { libc::access(path.as_ptr(), libc::W_OK) } == 0
 }
 
-/// A symlink to some copy of Scrawl.app's binary, whether or not it still exists.
+/// A symlink to some copy of Scrawl, whether or not it still exists: Scrawl.app's binary, a
+/// Linux AppImage (`Scrawl-x86_64.AppImage`, renamed or versioned as downloads are), or the
+/// binary `scripts/linux/install-local.sh` installs.
 fn scrawl_link(link: &Path) -> bool {
-    std::fs::read_link(link).is_ok_and(|to| to.ends_with("Contents/MacOS/scrawl"))
+    std::fs::read_link(link).is_ok_and(|to| is_scrawl_binary(&to))
+}
+
+fn is_scrawl_binary(to: &Path) -> bool {
+    let name = to
+        .file_name()
+        .map(|n| n.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    to.ends_with("Contents/MacOS/scrawl")
+        || to.ends_with("lib/scrawl/scrawl")
+        || (name.starts_with("scrawl") && name.ends_with(".appimage"))
 }
 
 fn links_to(link: &Path, target: &Path) -> bool {
@@ -174,12 +186,12 @@ fn symlink(_target: &Path, _link: &Path) -> std::io::Result<()> {
 /// Removes the link Install made (or a stale one). Anything that isn't a link to Scrawl stays.
 pub fn uninstall(places: &Places) -> Result<()> {
     let link = match state(places) {
-        State::Installed { link, .. } | State::Stale { link } => link,
+        // `state` found it pointing at this Scrawl, so it's ours whatever the target's name.
+        State::Installed { link, .. } => link,
+        State::Stale { link } if scrawl_link(&link) => link,
         _ => return Ok(()),
     };
-    if scrawl_link(&link) {
-        std::fs::remove_file(&link).with_context(|| format!("couldn't remove {}", tilde(&link)))?;
-    }
+    std::fs::remove_file(&link).with_context(|| format!("couldn't remove {}", tilde(&link)))?;
     Ok(())
 }
 
@@ -204,6 +216,25 @@ pub fn usually_on_path(link: &Path) -> bool {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn links_to_any_copy_of_scrawl_are_recognised() {
+        for scrawl in [
+            "/Applications/Scrawl.app/Contents/MacOS/scrawl",
+            "/home/k/Downloads/Scrawl-x86_64.AppImage",
+            "/home/k/Apps/scrawl-0.3.14-aarch64.AppImage",
+            "/home/k/.local/lib/scrawl/scrawl",
+        ] {
+            assert!(is_scrawl_binary(Path::new(scrawl)), "{scrawl}");
+        }
+        for other in [
+            "/usr/bin/scrawl-notes",
+            "/home/k/Apps/Other.AppImage",
+            "/usr/bin/scrawl",
+        ] {
+            assert!(!is_scrawl_binary(Path::new(other)), "{other}");
+        }
+    }
 
     struct Sandbox(PathBuf);
 

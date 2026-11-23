@@ -1638,7 +1638,11 @@ pub fn extract_frames_range(
                     "-y",
                     "-ss",
                 ])
-                .arg(format!("{:.3}", from_ms as f64 / 1_000.0))
+                // The movie's clock starts `offset_ms` into the bundle's, as `movie_frames_at`.
+                .arg(format!(
+                    "{:.3}",
+                    from_ms.saturating_sub(offset_ms) as f64 / 1_000.0
+                ))
                 .args(["-threads", "1", "-filter_threads", "1"])
                 .arg("-i")
                 .arg(&video)

@@ -43,7 +43,8 @@ pub fn parse_clock_ms(input: &str) -> Option<u64> {
         if !s.is_finite() || s < 0.0 {
             return None;
         }
-        Some(m * 60_000 + (s * 1_000.0).round() as u64)
+        m.checked_mul(60_000)?
+            .checked_add((s * 1_000.0).round() as u64)
     } else if let Some(ms_str) = trimmed.strip_suffix("ms") {
         ms_str.trim().parse().ok()
     } else {
@@ -605,6 +606,15 @@ impl RgbaFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clock_times_parse_and_absurd_ones_are_refused() {
+        assert_eq!(parse_clock_ms("1:02.5"), Some(62_500));
+        assert_eq!(parse_clock_ms("12.5"), Some(12_500));
+        assert_eq!(parse_clock_ms("250ms"), Some(250));
+        assert_eq!(parse_clock_ms("99999999999999999:00"), None);
+        assert_eq!(parse_clock_ms("-1"), None);
+    }
 
     fn span(t0: u64, t1: u64, name: &str) -> ScreenSpan {
         ScreenSpan {
